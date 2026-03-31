@@ -2,11 +2,7 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
-typedef struct {
-    ngx_flag_t set;
-    ngx_str_t module_path;
-    ngx_str_t export_name;
-} ngx_http_wasm_conf_t;
+#include <ngx_http_wasm_runtime.h>
 
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
 static char *
@@ -189,38 +185,9 @@ ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     return NGX_CONF_OK;
 }
 
-static ngx_int_t ngx_http_wasm_stub_send_response(ngx_http_request_t *r,
-                                                  ngx_str_t *body) {
-    ngx_buf_t *b;
-    ngx_chain_t out;
-
-    r->headers_out.status = NGX_HTTP_OK;
-    r->headers_out.content_length_n = body->len;
-    ngx_str_set(&r->headers_out.content_type, "text/plain");
-
-    if (ngx_http_send_header(r) != NGX_OK) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    b = ngx_calloc_buf(r->pool);
-    if (b == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    b->pos = body->data;
-    b->last = body->data + body->len;
-    b->memory = 1;
-    b->last_buf = 1;
-
-    out.buf = b;
-    out.next = NULL;
-
-    return ngx_http_output_filter(r, &out);
-}
-
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
     ngx_http_wasm_conf_t *wcf;
-    ngx_str_t body;
+    ngx_http_wasm_exec_ctx_t exec;
     ngx_int_t rc;
 
     wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
@@ -245,9 +212,14 @@ static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
         return rc;
     }
 
-    ngx_str_set(&body, "ngx_wasm phase 1 stub\n");
+    ngx_http_wasm_runtime_init_exec_ctx(&exec, r, wcf);
 
-    rc = ngx_http_wasm_stub_send_response(r, &body);
+    rc = ngx_http_wasm_runtime_run(&exec);
+    if (rc != NGX_HTTP_WASM_RUNTIME_CONTINUE) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    rc = ngx_http_wasm_abi_send_response(&exec.abi);
     if (rc == NGX_ERROR) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }

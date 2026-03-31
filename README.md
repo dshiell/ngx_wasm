@@ -12,10 +12,31 @@ The current implementation is a Phase 1 skeleton:
 - resolves module paths using NGINX prefix-relative semantics
 - merges configuration down to the active location
 - installs a content handler for location-scoped `content_by_wasm`
-- logs the configured module path and export name
-- returns a stub plain-text response
+- routes execution through a narrow ABI/runtime layer
+- stages response data through a host-side ABI context
+- currently uses a runtime stub instead of Wasmtime
 
 No Wasmtime integration exists yet.
+
+## Phase 1 ABI shape
+
+The initial ABI is intentionally narrow:
+
+- guest export: `on_content() -> i32`
+- host imports planned for the guest:
+  - `ngx_wasm_log(level, ptr, len)`
+  - `ngx_wasm_resp_set_status(status)`
+  - `ngx_wasm_resp_write(ptr, len)`
+
+The host-side ABI implementation already exists in:
+
+- [`include/ngx_http_wasm_abi.h`](/Users/derek/projects/nginx-playground/ngx_wasm/include/ngx_http_wasm_abi.h)
+- [`src/ngx_http_wasm_abi.c`](/Users/derek/projects/nginx-playground/ngx_wasm/src/ngx_http_wasm_abi.c)
+- [`include/ngx_http_wasm_runtime.h`](/Users/derek/projects/nginx-playground/ngx_wasm/include/ngx_http_wasm_runtime.h)
+- [`src/ngx_http_wasm_runtime.c`](/Users/derek/projects/nginx-playground/ngx_wasm/src/ngx_http_wasm_runtime.c)
+
+The current runtime stub uses borrowed static buffers where possible to keep the
+response path close to the intended low-copy design.
 
 ## Example guest Wasm module
 

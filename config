@@ -1,5 +1,8 @@
 ngx_addon_name=ngx_http_wasm_module
 ngx_module_type=HTTP
 ngx_module_name=ngx_http_wasm_module
-ngx_module_srcs="$ngx_addon_dir/src/ngx_http_wasm_module.c"
+ngx_module_incs="$ngx_addon_dir/include"
+ngx_module_srcs="$ngx_addon_dir/src/ngx_http_wasm_module.c \
+$ngx_addon_dir/src/ngx_http_wasm_abi.c \
+$ngx_addon_dir/src/ngx_http_wasm_runtime.c"
 . auto/module
