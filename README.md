@@ -17,6 +17,26 @@ The current implementation is a Phase 1 skeleton:
 
 No Wasmtime integration exists yet.
 
+## Example guest Wasm module
+
+A minimal guest example lives in
+[`examples/hello-world`](/Users/derek/projects/nginx-playground/ngx_wasm/examples/hello-world).
+
+Build it with:
+
+```sh
+make hello-world
+```
+
+or directly:
+
+```sh
+cd examples/hello-world
+cargo build --release --target wasm32-unknown-unknown
+```
+
+The exported guest entrypoint is `on_content`.
+
 ## Build with local nginx source
 
 From [`nginx`](/Users/derek/projects/nginx-playground/nginx):
@@ -24,6 +44,21 @@ From [`nginx`](/Users/derek/projects/nginx-playground/nginx):
 ```sh
 auto/configure --add-module=../ngx_wasm
 make -j"$(sysctl -n hw.ncpu)"
+```
+
+## Formatting
+
+If `clang-format` is available in `PATH`:
+
+```sh
+make format
+make check-format
+```
+
+If it is installed elsewhere:
+
+```sh
+make CLANG_FORMAT=/path/to/clang-format format
 ```
 
 ## Example configuration
@@ -34,7 +69,7 @@ http {
         listen 8080;
 
         location /wasm {
-            content_by_wasm wasm/hello.wasm on_content;
+            content_by_wasm examples/hello-world/target/wasm32-unknown-unknown/release/ngx_wasm_hello_world.wasm on_content;
         }
     }
 }
