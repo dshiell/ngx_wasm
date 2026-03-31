@@ -1,2 +1,49 @@
 # ngx_wasm
-Nginx wasm module
+
+`ngx_wasm` is an out-of-tree NGINX HTTP module implementing the first
+vertical slice of `content_by_wasm`.
+
+## Current status
+
+The current implementation is a Phase 1 skeleton:
+
+- registers `content_by_wasm <module-path> <export>`
+- accepts the directive in `http`, `server`, and `location` contexts
+- resolves module paths using NGINX prefix-relative semantics
+- merges configuration down to the active location
+- installs a content handler for location-scoped `content_by_wasm`
+- logs the configured module path and export name
+- returns a stub plain-text response
+
+No Wasmtime integration exists yet.
+
+## Build with local nginx source
+
+From [`nginx`](/Users/derek/projects/nginx-playground/nginx):
+
+```sh
+auto/configure --add-module=../ngx_wasm
+make -j"$(sysctl -n hw.ncpu)"
+```
+
+## Example configuration
+
+```nginx
+http {
+    server {
+        listen 8080;
+
+        location /wasm {
+            content_by_wasm wasm/hello.wasm on_content;
+        }
+    }
+}
+```
+
+## Expected current behavior
+
+Requests to `/wasm` should:
+
+- hit the `ngx_wasm` content handler
+- log the resolved module path and export name
+- return `200 OK` with body `ngx_wasm phase 1 stub`
