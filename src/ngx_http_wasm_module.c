@@ -8,6 +8,8 @@ static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
 static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_wasm_install_content_handler(ngx_conf_t *cf);
+static ngx_int_t ngx_http_wasm_init_process(ngx_cycle_t *cycle);
+static void ngx_http_wasm_exit_process(ngx_cycle_t *cycle);
 static void *ngx_http_wasm_create_main_conf(ngx_conf_t *cf);
 static char *ngx_http_wasm_init_main_conf(ngx_conf_t *cf, void *conf);
 static void *ngx_http_wasm_create_srv_conf(ngx_conf_t *cf);
@@ -50,10 +52,10 @@ ngx_module_t ngx_http_wasm_module = {
     NGX_HTTP_MODULE,           /* module type */
     NULL,                      /* init master */
     NULL,                      /* init module */
-    NULL,                      /* init process */
+    ngx_http_wasm_init_process, /* init process */
     NULL,                      /* init thread */
     NULL,                      /* exit thread */
-    NULL,                      /* exit process */
+    ngx_http_wasm_exit_process, /* exit process */
     NULL,                      /* exit master */
     NGX_MODULE_V1_PADDING};
 
@@ -142,6 +144,14 @@ static ngx_int_t ngx_http_wasm_install_content_handler(ngx_conf_t *cf) {
     clcf->handler = ngx_http_wasm_content_handler;
 
     return NGX_OK;
+}
+
+static ngx_int_t ngx_http_wasm_init_process(ngx_cycle_t *cycle) {
+    return ngx_http_wasm_runtime_init_process(cycle);
+}
+
+static void ngx_http_wasm_exit_process(ngx_cycle_t *cycle) {
+    ngx_http_wasm_runtime_exit_process(cycle);
 }
 
 static char *

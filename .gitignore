@@ -1,4 +1,5 @@
 /target/
+/runtime/target/
 /examples/*/target/
 *.o
 *.so
@@ -6,6 +7,8 @@
 *.dll
 *.a
 *.wasm
+third_party/*.tar.xz
+third_party/wasmtime-*/
 
 .DS_Store
 

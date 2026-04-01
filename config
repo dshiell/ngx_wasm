@@ -1,7 +1,55 @@
 ngx_addon_name=ngx_http_wasm_module
 ngx_module_type=HTTP
 ngx_module_name=ngx_http_wasm_module
-ngx_module_incs="$ngx_addon_dir/include"
+WASMTIME_VERSION="${WASMTIME_VERSION:-36.0.3}"
+WASMTIME_DIR="${WASMTIME_DIR:-$ngx_addon_dir/third_party/wasmtime-$WASMTIME_VERSION}"
+
+if [ ! -d "$WASMTIME_DIR" ]; then
+    for ngx_wasmtime_legacy_dir in "$ngx_addon_dir"/third_party/wasmtime-v*-c-api; do
+        if [ -d "$ngx_wasmtime_legacy_dir" ]; then
+            WASMTIME_DIR="$ngx_wasmtime_legacy_dir"
+            break
+        fi
+    done
+fi
+
+if [ ! -f "$WASMTIME_DIR/include/wasmtime.h" ] || [ ! -f "$WASMTIME_DIR/include/wasm.h" ]; then
+    cat <<EOF
+
+$ngx_addon_name: Wasmtime C API headers not found in:
+  $WASMTIME_DIR
+
+Fetch the pinned Wasmtime release with:
+  make -C $ngx_addon_dir wasmtime-fetch
+
+Or provide an explicit path:
+  WASMTIME_DIR=/path/to/wasmtime-c-api auto/configure --add-module=$ngx_addon_dir
+EOF
+    exit 1
+fi
+
+if [ -f "$WASMTIME_DIR/lib/libwasmtime.a" ]; then
+    ngx_wasmtime_lib="$WASMTIME_DIR/lib/libwasmtime.a"
+elif [ -f "$WASMTIME_DIR/lib/libwasmtime.so" ]; then
+    ngx_wasmtime_lib="$WASMTIME_DIR/lib/libwasmtime.so"
+elif [ -f "$WASMTIME_DIR/lib/libwasmtime.dylib" ]; then
+    ngx_wasmtime_lib="$WASMTIME_DIR/lib/libwasmtime.dylib"
+else
+    cat <<EOF
+
+$ngx_addon_name: Wasmtime C API library not found in:
+  $WASMTIME_DIR/lib
+
+Expected one of:
+  libwasmtime.a
+  libwasmtime.so
+  libwasmtime.dylib
+EOF
+    exit 1
+fi
+
+ngx_module_incs="$ngx_addon_dir/include $WASMTIME_DIR/include"
+ngx_module_libs="$ngx_wasmtime_lib"
 ngx_module_srcs="$ngx_addon_dir/src/ngx_http_wasm_module.c \
 $ngx_addon_dir/src/ngx_http_wasm_abi.c \
 $ngx_addon_dir/src/ngx_http_wasm_runtime.c"
