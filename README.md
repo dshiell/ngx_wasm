@@ -1,183 +1,125 @@
 # ngx_wasm
 
-`ngx_wasm` is an out-of-tree NGINX HTTP module implementing the first
-vertical slice of `content_by_wasm`.
+`ngx_wasm` is an out-of-tree NGINX HTTP module for running request handlers in
+WebAssembly.
 
-## Current status
+The current focus is an OpenResty-style programming model for standard,
+unmodified NGINX, starting with `content_by_wasm`.
 
-The current implementation is a Phase 1 skeleton:
+Project references:
 
-- registers `content_by_wasm <module-path> <export>`
-- accepts the directive in `http`, `server`, and `location` contexts
-- resolves module paths using NGINX prefix-relative semantics
-- merges configuration down to the active location
-- installs a content handler for location-scoped `content_by_wasm`
-- routes execution through a narrow ABI/runtime layer
-- stages response data through a host-side ABI context
-- routes execution into a Wasmtime C runtime embedding
+- NGINX: https://github.com/nginx/nginx
+- OpenResty / `lua-nginx-module`: https://github.com/openresty/lua-nginx-module
+- Wasmtime: https://github.com/bytecodealliance/wasmtime
 
-The initial Wasmtime integration is now present, but still narrow:
+## What It Does
 
-- one exported guest function
-- one request-local invocation
-- per-process in-memory module cache inside the runtime library
-- fuel limit set per invocation
-- no async/yield path yet
+Today, `ngx_wasm` provides an initial vertical slice of:
 
-## Implementation Principles
+- `content_by_wasm <module-path> <export>`
+- OpenResty-style configuration placement in `http`, `server`, and `location`
+- Wasmtime C API embedding as the current WebAssembly runtime
+- one guest export invocation per request
+- basic host functions for logging and writing a response
 
-`ngx_wasm` follows a strict KISS discipline.
+This is still early-stage software, but the direction is clear:
 
-- keep one obvious lifecycle path for each feature
-- avoid fallback behavior that hides missing initialization or broken state
-- implement only what is needed now, not speculative future abstractions
-- keep functions small and focused on a single job
-- keep structs limited to fields with a clear current purpose
-- prefer explicit control flow over cleverness
-- add complexity only when a real feature requires it and tests justify it
+- keep NGINX as the server
+- keep the module out-of-tree and usable with stock NGINX
+- use WebAssembly for safer, language-flexible guest logic
+- learn from OpenResty semantics without requiring OpenResty as the runtime
 
-This module will become complex on its own because of NGINX phase semantics,
-Wasm runtime integration, gas accounting, and suspension/resume behavior. The
-implementation should not add extra incidental complexity on top of that.
+## Why NGINX
 
-## Wasmtime Dependency
+NGINX was chosen because it already provides the core request-processing model
+this project wants to extend:
 
-`ngx_wasm` uses Wasmtime's C API and expects a pinned release unpacked at:
+- mature HTTP phase and filter pipeline
+- production-proven event-driven architecture
+- familiar configuration and inheritance model
+- strong operational footprint and ecosystem
 
-```sh
-third_party/wasmtime-36.0.3
-```
+The goal is not to replace NGINX. The goal is to make NGINX programmable in a
+way that borrows the best ideas from OpenResty while staying compatible with
+standard unmodified NGINX.
 
-Fetch the correct archive for the current macOS/Linux platform and CPU with:
+## Why WebAssembly
+
+WebAssembly was chosen as the guest execution layer because it offers:
+
+- stronger isolation than embedding application logic directly in-process
+- a path to multi-language support
+- explicit execution budgeting and control
+- a better fit for typed SDKs than a dynamic scripting-only model
+
+The current runtime choice is Wasmtime via its C API.
+
+## How It Compares
+
+| Feature | `ngx_wasm` | OpenResty / `lua-nginx-module` | Proxy-Wasm style systems |
+| --- | --- | --- | --- |
+| Core server model | Standard NGINX module | NGINX/OpenResty | Varies by host proxy |
+| Primary inspiration | OpenResty semantics | Native project model | Generalized proxy ABI |
+| Guest runtime | WASM via Wasmtime | Lua / LuaJIT | WASM |
+| Main goal | Programmable NGINX callbacks | Programmable NGINX callbacks | Portable proxy extensions |
+| Config model | NGINX config directives | NGINX config directives | Usually plugin/filter configuration |
+| Language model | Multi-language via WASM | Lua-first | Multi-language via WASM |
+| Execution budgeting | Planned first-class fuel/gas model | Not the primary model | Often host/runtime dependent |
+| Current project state | Early prototype | Mature | Mature in some ecosystems |
+
+OpenResty is the main source of semantic inspiration for this project. The goal
+is not to dismiss it, but to carry forward the programmable request-handling
+model with a WASM guest runtime.
+
+## Dependencies
+
+Build/runtime dependencies for the current implementation:
+
+- standard NGINX source tree for `--add-module`
+- Wasmtime C API
+- a C compiler for the nginx module build
+
+Optional example guest build dependencies:
+
+- a wasm-capable `clang`
+- `lld`/`wasm-ld` for linking guest `.wasm` examples
+
+## Performance
+
+Performance numbers are not published yet.
+
+The long-term goal is to publish comparative measurements covering:
+
+- request latency
+- host boundary overhead
+- guest startup and invocation overhead
+- the cost of execution budgeting and future yield/resume behavior
+
+## Quickstart
+
+Fetch the pinned Wasmtime C API release for the current macOS/Linux platform:
 
 ```sh
 make wasmtime-fetch
 ```
 
-The fetch script:
-
-- detects `Darwin` vs `Linux`
-- detects `aarch64`/`arm64` vs `x86_64`
-- downloads the matching Wasmtime C API release artifact
-- extracts it into `third_party/wasmtime-<version>/`
-- removes the downloaded tarball after extraction
-
-You can pin a different release by overriding `WASMTIME_VERSION`:
-
-```sh
-make WASMTIME_VERSION=36.0.3 wasmtime-fetch
-```
-
-If you already have a Wasmtime C API install elsewhere, point the nginx module
-build at it with `WASMTIME_DIR`:
-
-```sh
-WASMTIME_DIR=/path/to/wasmtime-c-api auto/configure --add-module=../ngx_wasm
-```
-
-## Phase 1 ABI shape
-
-The initial ABI is intentionally narrow:
-
-- guest export: `on_content() -> i32`
-- host imports planned for the guest:
-  - `ngx_wasm_log(level, ptr, len)`
-  - `ngx_wasm_resp_set_status(status)`
-  - `ngx_wasm_resp_write(ptr, len)`
-
-The host-side ABI implementation exists in:
-
-- [`include/ngx_http_wasm_abi.h`](/Users/derek/projects/nginx-playground/ngx_wasm/include/ngx_http_wasm_abi.h)
-- [`src/ngx_http_wasm_abi.c`](/Users/derek/projects/nginx-playground/ngx_wasm/src/ngx_http_wasm_abi.c)
-- [`include/ngx_http_wasm_runtime.h`](/Users/derek/projects/nginx-playground/ngx_wasm/include/ngx_http_wasm_runtime.h)
-- [`src/ngx_http_wasm_runtime.c`](/Users/derek/projects/nginx-playground/ngx_wasm/src/ngx_http_wasm_runtime.c)
-
-Current copy policy:
-
-- log import may borrow guest memory for the duration of the immediate host call
-- response body import copies guest memory into the NGINX request pool
-
-That response-body copy is intentional for correctness. Guest linear memory is
-owned by the Wasmtime store and cannot safely outlive the invocation or be used
-as an NGINX output buffer without stronger lifetime guarantees.
-
-## Example guest Wasm module
-
-A minimal guest example lives in
-[`examples/hello-world`](/Users/derek/projects/nginx-playground/ngx_wasm/examples/hello-world).
-
-Build it with:
+Build the example guest:
 
 ```sh
 make wasm
 ```
 
-If your default compiler does not support the `wasm32-unknown-unknown` target,
-override `CC` with a wasm-capable clang:
+Build NGINX with the module:
 
 ```sh
-make CC=/path/to/clang wasm
-```
-
-On macOS, the common fix is:
-
-```sh
-brew install llvm
-make CC=$(brew --prefix llvm)/bin/clang wasm
-```
-
-The example build now uses `-fuse-ld=lld` for the final wasm link. If the
-compile step works but the link step still fails, your LLVM install is missing
-`lld`/`wasm-ld` or it is not visible to the selected `clang`.
-
-On systems where `clang` cannot find the wasm linker automatically, install
-Homebrew `lld` and pass it explicitly:
-
-```sh
-brew install lld
-make CC=$(brew --prefix llvm)/bin/clang WASM_LD=$(brew --prefix lld)/bin/wasm-ld wasm
-```
-
-If the `lld` package exposes `ld.lld` instead of `wasm-ld`, use that path
-instead.
-
-or directly in the example directory:
-
-```sh
-cd examples/hello-world
-make build
-```
-
-The exported guest entrypoint is `on_content`.
-
-## Build with local nginx source
-
-From [`nginx`](/Users/derek/projects/nginx-playground/nginx):
-
-```sh
-cd ../ngx_wasm
-make wasmtime-fetch
 cd ../nginx
 auto/configure --add-module=../ngx_wasm
 make -j"$(sysctl -n hw.ncpu)"
 ```
 
-## Formatting
+## Basic Usage
 
-If `clang-format` is available in `PATH`:
-
-```sh
-make format
-make check-format
-```
-
-If it is installed elsewhere:
-
-```sh
-make CLANG_FORMAT=/path/to/clang-format format
-```
-
-## Example configuration
+Example nginx configuration:
 
 ```nginx
 http {
@@ -191,11 +133,44 @@ http {
 }
 ```
 
-## Expected current behavior
+Current expected behavior:
 
-Requests to `/wasm` should:
+- the request hits the `ngx_wasm` content handler
+- the guest export `on_content` is invoked
+- the guest writes the response via the host ABI
 
-- hit the `ngx_wasm` content handler
-- log the resolved module path and export name
-- execute guest `on_content`
-- return the body written by the guest via the ABI
+## Example Guest Build
+
+The low-level example guest lives in
+[`examples/hello-world`](/Users/derek/projects/nginx-playground/ngx_wasm/examples/hello-world).
+
+Build it with:
+
+```sh
+make wasm
+```
+
+If needed, override the toolchain:
+
+```sh
+make CC=/path/to/clang wasm
+make CC=/path/to/clang WASM_LD=/path/to/wasm-ld wasm
+```
+
+On macOS with Homebrew:
+
+```sh
+brew install llvm lld
+make CC=$(brew --prefix llvm)/bin/clang WASM_LD=$(brew --prefix lld)/bin/wasm-ld wasm
+```
+
+## Documentation
+
+- Project spec: [ngx_wasm_openresty_style_spec.md](/Users/derek/projects/nginx-playground/ngx_wasm_openresty_style_spec.md)
+- Design notes: [design.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/design.md)
+- Guest ABI: [abi.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/abi.md)
+
+## Status
+
+This repository is an active prototype. The current code is intentionally
+narrow and is being built phase by phase.
