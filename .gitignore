@@ -1,6 +1,6 @@
 /target/
 /runtime/target/
-/examples/*/target/
+/wasm/*/target/
 *.o
 *.so
 *.dylib

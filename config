@@ -20,7 +20,7 @@ $ngx_addon_name: Wasmtime C API headers not found in:
   $WASMTIME_DIR
 
 Fetch the pinned Wasmtime release with:
-  make -C $ngx_addon_dir wasmtime-fetch
+  make -C $ngx_addon_dir deps
 
 Or provide an explicit path:
   WASMTIME_DIR=/path/to/wasmtime-c-api auto/configure --add-module=$ngx_addon_dir

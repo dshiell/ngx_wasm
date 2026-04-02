@@ -83,6 +83,7 @@ Optional example guest build dependencies:
 
 - a wasm-capable `clang`
 - `lld`/`wasm-ld` for linking guest `.wasm` examples
+- Perl + `prove` for the `Test::Nginx` test suite
 
 ## Performance
 
@@ -100,7 +101,7 @@ The long-term goal is to publish comparative measurements covering:
 Fetch the pinned Wasmtime C API release for the current macOS/Linux platform:
 
 ```sh
-make wasmtime-fetch
+make deps
 ```
 
 Build the example guest:
@@ -108,6 +109,9 @@ Build the example guest:
 ```sh
 make wasm
 ```
+
+`make wasm` builds all current guest modules required by the example and test
+suite.
 
 Build NGINX with the module:
 
@@ -127,7 +131,7 @@ http {
         listen 8080;
 
         location /wasm {
-            content_by_wasm examples/hello-world/build/hello_world.wasm on_content;
+            content_by_wasm wasm/hello-world/build/hello_world.wasm on_content;
         }
     }
 }
@@ -142,7 +146,7 @@ Current expected behavior:
 ## Example Guest Build
 
 The low-level example guest lives in
-[`examples/hello-world`](/Users/derek/projects/nginx-playground/ngx_wasm/examples/hello-world).
+[`wasm/hello-world`](/Users/derek/projects/nginx-playground/ngx_wasm/wasm/hello-world).
 
 Build it with:
 
@@ -168,9 +172,19 @@ make CC=$(brew --prefix llvm)/bin/clang WASM_LD=$(brew --prefix lld)/bin/wasm-ld
 
 - Project spec: [ngx_wasm_openresty_style_spec.md](/Users/derek/projects/nginx-playground/ngx_wasm_openresty_style_spec.md)
 - Design notes: [design.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/design.md)
+- Testing plan: [testing.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/testing.md)
 - Guest ABI: [abi.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/abi.md)
 
 ## Status
 
 This repository is an active prototype. The current code is intentionally
 narrow and is being built phase by phase.
+
+## Testing
+
+Install development dependencies and run the current test suite:
+
+```sh
+make deps
+make test
+```

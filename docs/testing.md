@@ -1,0 +1,57 @@
+# Testing Plan
+
+`ngx_wasm` uses OpenResty-style testing ideas because the module intentionally
+follows OpenResty semantics where practical.
+
+Primary harness direction:
+
+- `Test::Nginx::Socket`
+
+Why:
+
+- it is widely used by OpenResty modules, including `lua-nginx-module`
+- it is well suited for nginx module testing with inline config snippets,
+  request definitions, response assertions, and error-log matching
+- it matches the semantic shape of the behaviors `ngx_wasm` cares about:
+  directive parsing, request phases, config inheritance, error paths, and
+  eventually async behavior
+
+How OpenResty tests should be used:
+
+- reuse the harness
+- reuse test structure and intent where semantics match
+- port test ideas selectively instead of copying Lua-specific tests verbatim
+
+Dependency setup:
+
+- `make deps` should fetch the pinned Wasmtime C API and a local
+  `test-nginx` checkout under `third_party/`
+- `make test` should be the single entry point for running the current test
+  suite
+
+Current staged plan:
+
+1. `t/001-content-basic.t`
+   - successful `content_by_wasm`
+   - expected HTTP status
+   - expected response body
+
+2. `t/002-content-failures.t`
+   - missing export
+   - missing memory export
+   - guest trap
+   - non-zero guest return
+   - bad module path
+
+3. Later phase-specific suites
+   - rewrite
+   - access
+   - subrequests
+   - async fuel/yield behavior
+
+Testing principles:
+
+- tests should follow the real nginx module behavior, not test-only shortcuts
+- every failure mode should assert both HTTP behavior and the relevant log text
+- config-parse failures and request-time failures should be tested separately
+- async tests should only be added once the async runtime behavior exists
