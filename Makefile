@@ -5,6 +5,7 @@ FORMAT_FILES = src/ngx_http_wasm_module.c
 HELLO_WORLD_DIR = examples/hello-world
 
 .PHONY: format check-format hello-world wasm wasmtime-fetch
+.PHONY: smoke-content-by-wasm
 
 format:
 ifndef CLANG_FORMAT
@@ -26,3 +27,6 @@ wasm:
 
 wasmtime-fetch:
 	WASMTIME_VERSION=$(WASMTIME_VERSION) ./scripts/fetch-wasmtime.sh
+
+smoke-content-by-wasm:
+	./scripts/smoke-content-by-wasm.sh

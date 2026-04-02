@@ -13,17 +13,11 @@ typedef struct {
     ngx_str_t export_name;
 } ngx_http_wasm_conf_t;
 
-typedef enum {
-    NGX_HTTP_WASM_RUNTIME_CONTINUE = 0,
-    NGX_HTTP_WASM_RUNTIME_ERROR = -1
-} ngx_http_wasm_runtime_result_e;
-
 typedef struct {
     ngx_http_request_t *request;
     ngx_http_wasm_conf_t *conf;
     ngx_http_wasm_abi_ctx_t abi;
     uint64_t fuel_limit;
-    uint64_t timeslice_fuel;
 } ngx_http_wasm_exec_ctx_t;
 
 ngx_int_t ngx_http_wasm_runtime_init_process(ngx_cycle_t *cycle);

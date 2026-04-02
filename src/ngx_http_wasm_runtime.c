@@ -22,7 +22,6 @@
 typedef struct {
     ngx_queue_t queue;
     ngx_str_t module_path;
-    u_char *module_path_cstr;
     wasmtime_module_t *module;
 } ngx_http_wasm_cached_module_t;
 
@@ -186,7 +185,6 @@ void ngx_http_wasm_runtime_init_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx,
     ctx->request = r;
     ctx->conf = conf;
     ctx->fuel_limit = NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT;
-    ctx->timeslice_fuel = NGX_HTTP_WASM_DEFAULT_TIMESLICE_FUEL;
 
     ngx_http_wasm_abi_init(&ctx->abi, r);
 }
@@ -299,7 +297,6 @@ static ngx_http_wasm_cached_module_t *ngx_http_wasm_runtime_load_module(
 
     entry->module_path.data = path;
     entry->module_path.len = ctx->conf->module_path.len;
-    entry->module_path_cstr = path;
 
     if (ngx_http_wasm_runtime_read_file(ngx_http_wasm_runtime.pool,
                                         ctx->request->connection->log,
@@ -597,12 +594,12 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                       ctx->request->connection->log,
                       0,
                       "ngx_wasm: runtime not initialized");
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     module = ngx_http_wasm_runtime_load_module(ctx);
     if (module == NULL) {
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     store = wasmtime_store_new(ngx_http_wasm_runtime.engine, ctx, NULL);
@@ -611,7 +608,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                       ctx->request->connection->log,
                       0,
                       "ngx_wasm: failed to create Wasmtime store");
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     context = wasmtime_store_context(store);
@@ -620,7 +617,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         ngx_http_wasm_runtime_log_error(
             ctx->request->connection->log, "failed to set fuel", error);
         wasmtime_store_delete(store);
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     trap = NULL;
@@ -630,14 +627,14 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         ngx_http_wasm_runtime_log_error(
             ctx->request->connection->log, "failed to instantiate module", error);
         wasmtime_store_delete(store);
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     if (trap != NULL) {
         ngx_http_wasm_runtime_log_trap(
             ctx->request->connection->log, "module start trap", trap);
         wasmtime_store_delete(store);
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     if (!wasmtime_instance_export_get(context,
@@ -652,7 +649,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                       "ngx_wasm: export \"%V\" not found or not a function",
                       &ctx->conf->export_name);
         wasmtime_store_delete(store);
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     trap = NULL;
@@ -664,14 +661,14 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         ngx_http_wasm_runtime_log_error(
             ctx->request->connection->log, "guest call failed", error);
         wasmtime_store_delete(store);
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     if (trap != NULL) {
         ngx_http_wasm_runtime_log_trap(
             ctx->request->connection->log, "guest trapped", trap);
         wasmtime_store_delete(store);
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     if (result.kind != WASMTIME_I32 || result.of.i32 != 0) {
@@ -682,10 +679,10 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                       &ctx->conf->export_name,
                       (int)result.of.i32);
         wasmtime_store_delete(store);
-        return NGX_HTTP_WASM_RUNTIME_ERROR;
+        return NGX_ERROR;
     }
 
     wasmtime_store_delete(store);
 
-    return NGX_HTTP_WASM_RUNTIME_CONTINUE;
+    return NGX_OK;
 }

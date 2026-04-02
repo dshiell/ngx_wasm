@@ -25,7 +25,7 @@ static ngx_command_t ngx_http_wasm_commands[] = {
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
          NGX_CONF_TAKE2,
      ngx_http_wasm_content_by,
-     0,
+     NGX_HTTP_LOC_CONF_OFFSET,
      0,
      NULL},
 
@@ -128,7 +128,7 @@ ngx_http_wasm_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
         return rc;
     }
 
-    if (conf->set) {
+    if (conf->set == 1) {
         if (ngx_http_wasm_install_content_handler(cf) != NGX_OK) {
             return NGX_CONF_ERROR;
         }
@@ -160,19 +160,9 @@ ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_str_t *value;
 
     (void)cmd;
-    (void)conf;
+    wcf = conf;
 
-    if (cf->cmd_type & NGX_HTTP_MAIN_CONF) {
-        wcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_wasm_module);
-
-    } else if (cf->cmd_type & NGX_HTTP_SRV_CONF) {
-        wcf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_wasm_module);
-
-    } else {
-        wcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_wasm_module);
-    }
-
-    if (wcf->set) {
+    if (wcf->set == 1) {
         return "is duplicate";
     }
 
@@ -186,12 +176,6 @@ ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         return NGX_CONF_ERROR;
     }
 
-    if (cf->cmd_type & NGX_HTTP_LOC_CONF) {
-        if (ngx_http_wasm_install_content_handler(cf) != NGX_OK) {
-            return NGX_CONF_ERROR;
-        }
-    }
-
     return NGX_CONF_OK;
 }
 
@@ -202,7 +186,7 @@ static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
 
     wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
 
-    if (!wcf->set) {
+    if (wcf->set != 1) {
         return NGX_DECLINED;
     }
 
@@ -225,7 +209,7 @@ static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
     ngx_http_wasm_runtime_init_exec_ctx(&exec, r, wcf);
 
     rc = ngx_http_wasm_runtime_run(&exec);
-    if (rc != NGX_HTTP_WASM_RUNTIME_CONTINUE) {
+    if (rc != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
