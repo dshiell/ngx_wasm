@@ -17,6 +17,7 @@ TEST_NGINX_CLIENT_PORT ?=
 TEST_NGINX_SERVROOT ?=
 NGINX_DIR ?= $(abspath ../nginx)
 NGINX_BIN ?= $(NGINX_DIR)/objs/nginx
+NGINX_BUILD_INFO ?= $(NGINX_DIR)/objs/ngx_wasm_build.env
 NGINX_BUILD_JOBS ?= 2
 RUSTC ?= $(shell \
 	if [ -x "$(HOME)/.cargo/bin/rustc" ]; then \
@@ -31,16 +32,32 @@ RUSTUP ?= $(shell \
 		command -v rustup; \
 	fi)
 WASM_TARGET ?= wasm32-unknown-unknown
+BUILD_SANITIZE ?= 0
 SANITIZER_CC ?= clang
 SANITIZER_FLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
 ASAN_OPTIONS ?= detect_leaks=1:abort_on_error=1
+else
+ASAN_OPTIONS ?= detect_leaks=0:abort_on_error=1
+endif
 UBSAN_OPTIONS ?= print_stacktrace=1:halt_on_error=1
 
 FORMAT_FILES = $(sort $(wildcard src/*.c include/*.h))
 HELLO_WORLD_DIR = wasm/hello-world
 FAILURES_DIR = wasm/failures
 
-.PHONY: format check-format wasm deps nginx-sanitize smoke smoke-sanitize test test-sanitize clean
+ifeq ($(BUILD_SANITIZE),1)
+NGINX_CONFIGURE_ARGS = \
+	--with-cc="$(SANITIZER_CC)" \
+	--with-cc-opt='$(SANITIZER_FLAGS)' \
+	--with-ld-opt='$(SANITIZER_FLAGS)' \
+	--add-module="$(CURDIR)"
+else
+NGINX_CONFIGURE_ARGS = --add-module="$(CURDIR)"
+endif
+
+.PHONY: format check-format wasm deps nginx-build build smoke test clean
 
 format:
 ifeq ($(strip $(CLANG_FORMAT)),)
@@ -61,56 +78,39 @@ wasm:
 deps:
 	WASMTIME_VERSION=$(WASMTIME_VERSION) TEST_NGINX_REF=$(TEST_NGINX_REF) ./scripts/dev.sh
 
-nginx-sanitize:
+nginx-build:
 	cd "$(NGINX_DIR)" && \
-		auto/configure --with-cc="$(SANITIZER_CC)" \
-			--with-cc-opt='$(SANITIZER_FLAGS)' \
-			--with-ld-opt='$(SANITIZER_FLAGS)' \
-			--add-module="$(CURDIR)"
+		auto/configure $(NGINX_CONFIGURE_ARGS)
 	$(MAKE) -C "$(NGINX_DIR)" -j"$(NGINX_BUILD_JOBS)"
+	@mkdir -p "$(dir $(NGINX_BUILD_INFO))"
+	@{ \
+		printf 'BUILD_SANITIZE=%s\n' "$(BUILD_SANITIZE)"; \
+		printf 'ASAN_OPTIONS=%s\n' "$(ASAN_OPTIONS)"; \
+		printf 'UBSAN_OPTIONS=%s\n' "$(UBSAN_OPTIONS)"; \
+	} > "$(NGINX_BUILD_INFO)"
+
+build: wasm nginx-build
 
 smoke:
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/smoke-content-by-wasm.sh
 
-smoke-sanitize: wasm nginx-sanitize
-	ASAN_OPTIONS="$(ASAN_OPTIONS)" UBSAN_OPTIONS="$(UBSAN_OPTIONS)" \
-		$(MAKE) smoke NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)"
-
 test: wasm
-ifeq ($(wildcard $(TEST_NGINX_PERL_LIB)/Test/Nginx/Socket.pm),)
-	$(error Test::Nginx not found under $(TEST_NGINX_PERL_LIB); run `make deps` or set TEST_NGINX_PERL_LIB=/path/to/test-nginx/lib)
-endif
-	PERL5LIB=$(PERL_DEPS_LIB):$(TEST_NGINX_PERL_LIB):t/lib$(if $(PERL5LIB),:$(PERL5LIB)) NGX_WASM_ROOT=$(PWD) TEST_NGINX_BINARY=$(NGINX_BIN) TEST_NGINX_RANDOMIZE=$(TEST_NGINX_RANDOMIZE) TEST_NGINX_NO_CLEAN=$(TEST_NGINX_NO_CLEAN) TEST_NGINX_PORT="$(TEST_NGINX_PORT)" TEST_NGINX_SERVER_PORT="$(TEST_NGINX_SERVER_PORT)" TEST_NGINX_CLIENT_PORT="$(TEST_NGINX_CLIENT_PORT)" TEST_NGINX_SERVROOT="$(TEST_NGINX_SERVROOT)" $(PROVE) -r t/001-content-basic.t
-	PERL5LIB=$(PERL_DEPS_LIB):$(TEST_NGINX_PERL_LIB):t/lib$(if $(PERL5LIB),:$(PERL5LIB)) NGX_WASM_ROOT=$(PWD) TEST_NGINX_BINARY=$(NGINX_BIN) TEST_NGINX_RANDOMIZE=$(TEST_NGINX_RANDOMIZE) TEST_NGINX_NO_CLEAN=$(TEST_NGINX_NO_CLEAN) TEST_NGINX_PORT="$(TEST_NGINX_PORT)" TEST_NGINX_SERVER_PORT="$(TEST_NGINX_SERVER_PORT)" TEST_NGINX_CLIENT_PORT="$(TEST_NGINX_CLIENT_PORT)" TEST_NGINX_SERVROOT="$(TEST_NGINX_SERVROOT)" $(PROVE) -r t/002-content-failures.t
-	@if [ "$(TEST_NGINX_NO_CLEAN)" = "1" ]; then \
-		if [ -n "$(TEST_NGINX_SERVROOT)" ]; then \
-			servroot="$(TEST_NGINX_SERVROOT)"; \
-		else \
-			servroot=$$(find "$(PWD)/t" -maxdepth 1 -type d -name 'servroot*' -print | sort | tail -n 1); \
-		fi; \
-		if [ -n "$$servroot" ] && [ -d "$$servroot" ]; then \
-			port=$$(awk '/listen[[:space:]]+[0-9]+;/ { gsub(/;/, "", $$2); print $$2; exit }' "$$servroot/conf/nginx.conf" 2>/dev/null); \
-			pid=$$(cat "$$servroot/logs/nginx.pid" 2>/dev/null || true); \
-			info_file="$$servroot/ngx_wasm_test_run.txt"; \
-			{ \
-				printf 'servroot=%s\n' "$$servroot"; \
-				printf 'port=%s\n' "$$port"; \
-				printf 'pid=%s\n' "$$pid"; \
-				printf 'nginx_bin=%s\n' "$(NGINX_BIN)"; \
-			} > "$$info_file"; \
-			printf 'left test harness running\n'; \
-			printf '  servroot: %s\n' "$$servroot"; \
-			printf '  port: %s\n' "$$port"; \
-			printf '  pid: %s\n' "$$pid"; \
-			printf '  metadata: %s\n' "$$info_file"; \
-		fi; \
-	fi
-
-test-sanitize: wasm nginx-sanitize
-	ASAN_OPTIONS="$(ASAN_OPTIONS)" UBSAN_OPTIONS="$(UBSAN_OPTIONS)" \
-		$(MAKE) test NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)"
+	PROVE="$(PROVE)" \
+	TEST_NGINX_PERL_LIB="$(TEST_NGINX_PERL_LIB)" \
+	PERL_DEPS_LIB="$(PERL_DEPS_LIB)" \
+	NGX_WASM_ROOT="$(PWD)" \
+	TEST_NGINX_BINARY="$(NGINX_BIN)" \
+	NGINX_BUILD_INFO="$(NGINX_BUILD_INFO)" \
+	TEST_NGINX_RANDOMIZE="$(TEST_NGINX_RANDOMIZE)" \
+	TEST_NGINX_NO_CLEAN="$(TEST_NGINX_NO_CLEAN)" \
+	TEST_NGINX_PORT="$(TEST_NGINX_PORT)" \
+	TEST_NGINX_SERVER_PORT="$(TEST_NGINX_SERVER_PORT)" \
+	TEST_NGINX_CLIENT_PORT="$(TEST_NGINX_CLIENT_PORT)" \
+	TEST_NGINX_SERVROOT="$(TEST_NGINX_SERVROOT)" \
+	./scripts/run-tests.sh
 
 clean:
 	$(MAKE) -C $(HELLO_WORLD_DIR) clean
 	$(MAKE) -C $(FAILURES_DIR) clean
+	rm -f "$(NGINX_BUILD_INFO)"
 	rm -rf t/servroot_*

@@ -30,8 +30,8 @@ Dependency setup:
   `wasm32-unknown-unknown` target is available for Rust guest fixtures
 - `make test` should be the single entry point for running the current test
   suite
-- `make test-sanitize` should rebuild nginx with `ASan+UBSan` and run the
-  same suite against the sanitized binary
+- `BUILD_SANITIZE=1 make build` followed by `make test` should run the same
+  suite against an `ASan+UBSan` nginx binary
 - `NGINX_DIR=/path/to/nginx make test` should be supported so local runs and
   CI jobs do not depend on a hardcoded sibling checkout
 
