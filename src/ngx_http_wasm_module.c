@@ -47,16 +47,16 @@ static ngx_http_module_t ngx_http_wasm_module_ctx = {
 
 ngx_module_t ngx_http_wasm_module = {
     NGX_MODULE_V1,
-    &ngx_http_wasm_module_ctx, /* module context */
-    ngx_http_wasm_commands,    /* module directives */
-    NGX_HTTP_MODULE,           /* module type */
-    NULL,                      /* init master */
-    NULL,                      /* init module */
+    &ngx_http_wasm_module_ctx,  /* module context */
+    ngx_http_wasm_commands,     /* module directives */
+    NGX_HTTP_MODULE,            /* module type */
+    NULL,                       /* init master */
+    NULL,                       /* init module */
     ngx_http_wasm_init_process, /* init process */
-    NULL,                      /* init thread */
-    NULL,                      /* exit thread */
+    NULL,                       /* init thread */
+    NULL,                       /* exit thread */
     ngx_http_wasm_exit_process, /* exit process */
-    NULL,                      /* exit master */
+    NULL,                       /* exit master */
     NGX_MODULE_V1_PADDING};
 
 static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {

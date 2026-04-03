@@ -37,29 +37,34 @@ typedef struct {
 static ngx_http_wasm_runtime_state_t ngx_http_wasm_runtime;
 
 static void ngx_http_wasm_runtime_reset(void);
-static ngx_int_t ngx_http_wasm_runtime_define_host_funcs(
-    ngx_http_wasm_runtime_state_t *rt);
-static ngx_int_t ngx_http_wasm_runtime_define_func(
-    ngx_http_wasm_runtime_state_t *rt, const char *name,
-    wasm_functype_t *ty, wasmtime_func_callback_t cb);
+static ngx_int_t
+ngx_http_wasm_runtime_define_host_funcs(ngx_http_wasm_runtime_state_t *rt);
+static ngx_int_t
+ngx_http_wasm_runtime_define_func(ngx_http_wasm_runtime_state_t *rt,
+                                  const char *name,
+                                  wasm_functype_t *ty,
+                                  wasmtime_func_callback_t cb);
 static ngx_http_wasm_cached_module_t *
 ngx_http_wasm_runtime_find_module(const ngx_str_t *path);
-static ngx_http_wasm_cached_module_t *ngx_http_wasm_runtime_load_module(
-    ngx_http_wasm_exec_ctx_t *ctx);
+static ngx_http_wasm_cached_module_t *
+ngx_http_wasm_runtime_load_module(ngx_http_wasm_exec_ctx_t *ctx);
 static ngx_int_t ngx_http_wasm_runtime_read_file(ngx_pool_t *pool,
                                                  ngx_log_t *log,
                                                  const u_char *path,
                                                  ngx_str_t *out);
-static wasmtime_error_t *ngx_http_wasm_runtime_compile_module(
-    const ngx_str_t *bytes, wasmtime_module_t **module);
+static wasmtime_error_t *
+ngx_http_wasm_runtime_compile_module(const ngx_str_t *bytes,
+                                     wasmtime_module_t **module);
 static void ngx_http_wasm_runtime_log_error(ngx_log_t *log,
                                             const char *context,
                                             wasmtime_error_t *error);
 static void ngx_http_wasm_runtime_log_trap(ngx_log_t *log,
                                            const char *context,
                                            wasm_trap_t *trap);
-static wasm_trap_t *ngx_http_wasm_runtime_get_memory(
-    wasmtime_caller_t *caller, uint32_t ptr, uint32_t len, const u_char **data);
+static wasm_trap_t *ngx_http_wasm_runtime_get_memory(wasmtime_caller_t *caller,
+                                                     uint32_t ptr,
+                                                     uint32_t len,
+                                                     const u_char **data);
 static wasm_trap_t *ngx_http_wasm_runtime_bad_signature(const char *name);
 static wasm_trap_t *ngx_http_wasm_host_log(void *env,
                                            wasmtime_caller_t *caller,
@@ -67,9 +72,13 @@ static wasm_trap_t *ngx_http_wasm_host_log(void *env,
                                            size_t nargs,
                                            wasmtime_val_t *results,
                                            size_t nresults);
-static wasm_trap_t *ngx_http_wasm_host_resp_set_status(
-    void *env, wasmtime_caller_t *caller, const wasmtime_val_t *args,
-    size_t nargs, wasmtime_val_t *results, size_t nresults);
+static wasm_trap_t *
+ngx_http_wasm_host_resp_set_status(void *env,
+                                   wasmtime_caller_t *caller,
+                                   const wasmtime_val_t *args,
+                                   size_t nargs,
+                                   wasmtime_val_t *results,
+                                   size_t nresults);
 static wasm_trap_t *ngx_http_wasm_host_resp_write(void *env,
                                                   wasmtime_caller_t *caller,
                                                   const wasmtime_val_t *args,
@@ -189,16 +198,16 @@ void ngx_http_wasm_runtime_init_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx,
     ngx_http_wasm_abi_init(&ctx->abi, r);
 }
 
-static ngx_int_t ngx_http_wasm_runtime_define_host_funcs(
-    ngx_http_wasm_runtime_state_t *rt) {
-    if (ngx_http_wasm_runtime_define_func(rt,
-                                          "ngx_wasm_log",
-                                          wasm_functype_new_3_1(
-                                              wasm_valtype_new(WASM_I32),
-                                              wasm_valtype_new(WASM_I32),
-                                              wasm_valtype_new(WASM_I32),
-                                              wasm_valtype_new(WASM_I32)),
-                                          ngx_http_wasm_host_log) != NGX_OK) {
+static ngx_int_t
+ngx_http_wasm_runtime_define_host_funcs(ngx_http_wasm_runtime_state_t *rt) {
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_log",
+            wasm_functype_new_3_1(wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32)),
+            ngx_http_wasm_host_log) != NGX_OK) {
         return NGX_ERROR;
     }
 
@@ -211,23 +220,24 @@ static ngx_int_t ngx_http_wasm_runtime_define_host_funcs(
         return NGX_ERROR;
     }
 
-    if (ngx_http_wasm_runtime_define_func(rt,
-                                          "ngx_wasm_resp_write",
-                                          wasm_functype_new_2_1(
-                                              wasm_valtype_new(WASM_I32),
-                                              wasm_valtype_new(WASM_I32),
-                                              wasm_valtype_new(WASM_I32)),
-                                          ngx_http_wasm_host_resp_write) !=
-        NGX_OK) {
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_resp_write",
+            wasm_functype_new_2_1(wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32)),
+            ngx_http_wasm_host_resp_write) != NGX_OK) {
         return NGX_ERROR;
     }
 
     return NGX_OK;
 }
 
-static ngx_int_t ngx_http_wasm_runtime_define_func(
-    ngx_http_wasm_runtime_state_t *rt, const char *name, wasm_functype_t *ty,
-    wasmtime_func_callback_t cb) {
+static ngx_int_t
+ngx_http_wasm_runtime_define_func(ngx_http_wasm_runtime_state_t *rt,
+                                  const char *name,
+                                  wasm_functype_t *ty,
+                                  wasmtime_func_callback_t cb) {
     wasmtime_error_t *error;
 
     error = wasmtime_linker_define_func(rt->linker,
@@ -270,8 +280,8 @@ ngx_http_wasm_runtime_find_module(const ngx_str_t *path) {
     return NULL;
 }
 
-static ngx_http_wasm_cached_module_t *ngx_http_wasm_runtime_load_module(
-    ngx_http_wasm_exec_ctx_t *ctx) {
+static ngx_http_wasm_cached_module_t *
+ngx_http_wasm_runtime_load_module(ngx_http_wasm_exec_ctx_t *ctx) {
     ngx_http_wasm_cached_module_t *entry;
     ngx_str_t bytes;
     wasmtime_error_t *error;
@@ -287,7 +297,8 @@ static ngx_http_wasm_cached_module_t *ngx_http_wasm_runtime_load_module(
         return NULL;
     }
 
-    path = ngx_pnalloc(ngx_http_wasm_runtime.pool, ctx->conf->module_path.len + 1);
+    path =
+        ngx_pnalloc(ngx_http_wasm_runtime.pool, ctx->conf->module_path.len + 1);
     if (path == NULL) {
         return NULL;
     }
@@ -307,10 +318,9 @@ static ngx_http_wasm_cached_module_t *ngx_http_wasm_runtime_load_module(
 
     error = ngx_http_wasm_runtime_compile_module(&bytes, &entry->module);
     if (error != NULL) {
-        ngx_http_wasm_runtime_log_error(
-            ctx->request->connection->log,
-            "failed to compile guest module",
-            error);
+        ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
+                                        "failed to compile guest module",
+                                        error);
         return NULL;
     }
 
@@ -391,8 +401,9 @@ static ngx_int_t ngx_http_wasm_runtime_read_file(ngx_pool_t *pool,
     return NGX_OK;
 }
 
-static wasmtime_error_t *ngx_http_wasm_runtime_compile_module(
-    const ngx_str_t *bytes, wasmtime_module_t **module) {
+static wasmtime_error_t *
+ngx_http_wasm_runtime_compile_module(const ngx_str_t *bytes,
+                                     wasmtime_module_t **module) {
     static u_char wasm_magic[] = {0x00, 0x61, 0x73, 0x6d};
     wasm_byte_vec_t binary;
     wasmtime_error_t *error;
@@ -408,8 +419,10 @@ static wasmtime_error_t *ngx_http_wasm_runtime_compile_module(
         return error;
     }
 
-    error = wasmtime_module_new(
-        ngx_http_wasm_runtime.engine, (uint8_t *)binary.data, binary.size, module);
+    error = wasmtime_module_new(ngx_http_wasm_runtime.engine,
+                                (uint8_t *)binary.data,
+                                binary.size,
+                                module);
     wasm_byte_vec_delete(&binary);
 
     return error;
@@ -467,8 +480,10 @@ static wasm_trap_t *ngx_http_wasm_runtime_bad_signature(const char *name) {
     return wasmtime_trap_new(name, ngx_strlen(name));
 }
 
-static wasm_trap_t *ngx_http_wasm_runtime_get_memory(
-    wasmtime_caller_t *caller, uint32_t ptr, uint32_t len, const u_char **data) {
+static wasm_trap_t *ngx_http_wasm_runtime_get_memory(wasmtime_caller_t *caller,
+                                                     uint32_t ptr,
+                                                     uint32_t len,
+                                                     const u_char **data) {
     wasmtime_extern_t item;
     wasmtime_context_t *context;
     uint8_t *base;
@@ -480,9 +495,8 @@ static wasm_trap_t *ngx_http_wasm_runtime_get_memory(
                                     sizeof(NGX_HTTP_WASM_MEMORY_EXPORT) - 1,
                                     &item) ||
         item.kind != WASMTIME_EXTERN_MEMORY) {
-        return wasmtime_trap_new(
-            "guest memory export not found",
-            sizeof("guest memory export not found") - 1);
+        return wasmtime_trap_new("guest memory export not found",
+                                 sizeof("guest memory export not found") - 1);
     }
 
     context = wasmtime_caller_context(caller);
@@ -491,9 +505,9 @@ static wasm_trap_t *ngx_http_wasm_runtime_get_memory(
 
     end = (uint64_t)ptr + (uint64_t)len;
     if (end > size) {
-        return wasmtime_trap_new(
-            "guest memory access out of bounds",
-            sizeof("guest memory access out of bounds") - 1);
+        return wasmtime_trap_new("guest memory access out of bounds",
+                                 sizeof("guest memory access out of bounds") -
+                                     1);
     }
 
     *data = base + ptr;
@@ -514,7 +528,8 @@ static wasm_trap_t *ngx_http_wasm_host_log(void *env,
 
     if (nargs != 3 || nresults != 1 || args[0].kind != WASMTIME_I32 ||
         args[1].kind != WASMTIME_I32 || args[2].kind != WASMTIME_I32) {
-        return ngx_http_wasm_runtime_bad_signature("bad ngx_wasm_log signature");
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_log signature");
     }
 
     trap = ngx_http_wasm_runtime_get_memory(
@@ -531,9 +546,13 @@ static wasm_trap_t *ngx_http_wasm_host_log(void *env,
     return NULL;
 }
 
-static wasm_trap_t *ngx_http_wasm_host_resp_set_status(
-    void *env, wasmtime_caller_t *caller, const wasmtime_val_t *args,
-    size_t nargs, wasmtime_val_t *results, size_t nresults) {
+static wasm_trap_t *
+ngx_http_wasm_host_resp_set_status(void *env,
+                                   wasmtime_caller_t *caller,
+                                   const wasmtime_val_t *args,
+                                   size_t nargs,
+                                   wasmtime_val_t *results,
+                                   size_t nresults) {
     ngx_http_wasm_exec_ctx_t *ctx;
 
     (void)env;
@@ -625,11 +644,15 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     }
 
     trap = NULL;
-    error = wasmtime_linker_instantiate(
-        ngx_http_wasm_runtime.linker, context, module->module, &instance, &trap);
+    error = wasmtime_linker_instantiate(ngx_http_wasm_runtime.linker,
+                                        context,
+                                        module->module,
+                                        &instance,
+                                        &trap);
     if (error != NULL) {
-        ngx_http_wasm_runtime_log_error(
-            ctx->request->connection->log, "failed to instantiate module", error);
+        ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
+                                        "failed to instantiate module",
+                                        error);
         wasmtime_store_delete(store);
         return NGX_ERROR;
     }
@@ -657,8 +680,8 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     }
 
     trap = NULL;
-    error = wasmtime_func_call(
-        context, &item.of.func, NULL, 0, &result, 1, &trap);
+    error =
+        wasmtime_func_call(context, &item.of.func, NULL, 0, &result, 1, &trap);
     wasmtime_extern_delete(&item);
 
     if (error != NULL) {

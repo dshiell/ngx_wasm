@@ -1,4 +1,9 @@
-CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null)
+CLANG_FORMAT ?= $(shell \
+	if command -v clang-format >/dev/null 2>&1; then \
+		command -v clang-format; \
+	elif command -v xcrun >/dev/null 2>&1; then \
+		xcrun -f clang-format 2>/dev/null || true; \
+	fi)
 WASMTIME_VERSION ?= 36.0.3
 TEST_NGINX_REF ?= master
 PROVE ?= prove
@@ -33,13 +38,13 @@ FAILURES_DIR = wasm/failures
 .PHONY: format check-format wasm deps smoke test clean
 
 format:
-ifndef CLANG_FORMAT
+ifeq ($(strip $(CLANG_FORMAT)),)
 	$(error clang-format not found in PATH; set CLANG_FORMAT=/path/to/clang-format)
 endif
 	$(CLANG_FORMAT) -i $(FORMAT_FILES)
 
 check-format:
-ifndef CLANG_FORMAT
+ifeq ($(strip $(CLANG_FORMAT)),)
 	$(error clang-format not found in PATH; set CLANG_FORMAT=/path/to/clang-format)
 endif
 	$(CLANG_FORMAT) --dry-run --Werror $(FORMAT_FILES)
