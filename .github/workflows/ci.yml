@@ -85,6 +85,5 @@ jobs:
           name: ${{ runner.os }}-sanitizer-test-artifacts
           path: |
             t/servroot*
-            t/servroot.ci
             nginx/objs/ngx_wasm_build.env
           if-no-files-found: ignore

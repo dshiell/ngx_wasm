@@ -65,10 +65,28 @@ export TEST_NGINX_SERVER_PORT
 export TEST_NGINX_CLIENT_PORT
 export TEST_NGINX_SERVROOT
 
-find "${ROOT_DIR}/t" -maxdepth 1 -type f -name '*.t' | sort | \
+test_status=0
 while IFS= read -r test_file; do
-    "${PROVE_BIN}" -r "${test_file}"
-done
+    if ! "${PROVE_BIN}" -r "${test_file}"; then
+        test_status=$?
+        break
+    fi
+done < <(find "${ROOT_DIR}/t" -maxdepth 1 -type f -name '*.t' | sort)
+
+if [ "${test_status}" != "0" ]; then
+    if [ -n "${TEST_NGINX_SERVROOT}" ]; then
+        servroot="${TEST_NGINX_SERVROOT}"
+    else
+        servroot="$(find "${ROOT_DIR}/t" -maxdepth 1 -type d -name 'servroot*' -print | sort | tail -n 1)"
+    fi
+
+    if [ -n "${servroot:-}" ] && [ -f "${servroot}/logs/error.log" ]; then
+        printf '\nnginx error log: %s\n' "${servroot}/logs/error.log" >&2
+        cat "${servroot}/logs/error.log" >&2
+    fi
+
+    exit "${test_status}"
+fi
 
 if [ "${TEST_NGINX_NO_CLEAN}" != "1" ]; then
     exit 0
