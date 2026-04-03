@@ -87,4 +87,4 @@ endif
 clean:
 	$(MAKE) -C $(HELLO_WORLD_DIR) clean
 	$(MAKE) -C $(FAILURES_DIR) clean
-	rm -rf t/servroot
+	rm -rf t/servroot_*
