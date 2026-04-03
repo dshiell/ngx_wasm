@@ -3,10 +3,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NGINX_DIR="${NGINX_DIR:-${ROOT_DIR}/../nginx}"
 PROVE_BIN="${PROVE:-prove}"
 TEST_NGINX_PERL_LIB="${TEST_NGINX_PERL_LIB:-${ROOT_DIR}/third_party/test-nginx/lib}"
 PERL_DEPS_LIB="${PERL_DEPS_LIB:-${ROOT_DIR}/third_party/perl5/lib/perl5}"
-TEST_NGINX_BINARY="${TEST_NGINX_BINARY:-${ROOT_DIR}/../nginx/objs/nginx}"
+TEST_NGINX_BINARY="${TEST_NGINX_BINARY:-${NGINX_DIR}/objs/nginx}"
 TEST_NGINX_RANDOMIZE="${TEST_NGINX_RANDOMIZE:-1}"
 TEST_NGINX_NO_CLEAN="${TEST_NGINX_NO_CLEAN:-0}"
 TEST_NGINX_PORT="${TEST_NGINX_PORT:-}"
@@ -14,7 +15,7 @@ TEST_NGINX_SERVER_PORT="${TEST_NGINX_SERVER_PORT:-}"
 TEST_NGINX_CLIENT_PORT="${TEST_NGINX_CLIENT_PORT:-}"
 TEST_NGINX_SERVROOT="${TEST_NGINX_SERVROOT:-}"
 NGX_WASM_ROOT="${NGX_WASM_ROOT:-${ROOT_DIR}}"
-NGINX_BUILD_INFO="${NGINX_BUILD_INFO:-$(dirname "${TEST_NGINX_BINARY}")/ngx_wasm_build.env}"
+NGINX_BUILD_INFO="${NGINX_BUILD_INFO:-${NGINX_DIR}/objs/ngx_wasm_build.env}"
 
 if [ ! -f "${TEST_NGINX_PERL_LIB}/Test/Nginx/Socket.pm" ]; then
     echo "Test::Nginx not found under ${TEST_NGINX_PERL_LIB}" >&2

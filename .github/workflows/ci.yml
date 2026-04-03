@@ -72,17 +72,19 @@ jobs:
       - name: Check formatting
         run: make check-format
 
-      - name: Build
-        run: make build NGINX_DIR="${GITHUB_WORKSPACE}/nginx" NGINX_BUILD_JOBS=2
-
       - name: Build ASan+UBSan variant
-        if: runner.os == 'Linux'
         run: make build BUILD_SANITIZE=1 NGINX_DIR="${GITHUB_WORKSPACE}/nginx" NGINX_BUILD_JOBS=2
 
-      - name: Run Test::Nginx suite
-        if: runner.os == 'macOS'
+      - name: Run ASan+UBSan Test::Nginx suite
         run: make test NGINX_DIR="${GITHUB_WORKSPACE}/nginx"
 
-      - name: Run ASan+UBSan Test::Nginx suite
-        if: runner.os == 'Linux'
-        run: make test NGINX_DIR="${GITHUB_WORKSPACE}/nginx"
+      - name: Upload sanitizer test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ runner.os }}-sanitizer-test-artifacts
+          path: |
+            t/servroot*
+            t/servroot.ci
+            nginx/objs/ngx_wasm_build.env
+          if-no-files-found: ignore
