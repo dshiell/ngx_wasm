@@ -229,3 +229,7 @@ TEST_NGINX_RANDOMIZE=0 TEST_NGINX_PORT=1984 make test
 Sanitized builds currently assume a `clang`-compatible toolchain. Override
 `SANITIZER_CC`, `SANITIZER_FLAGS`, `ASAN_OPTIONS`, or `UBSAN_OPTIONS` if you
 need different sanitizer settings.
+
+The default sanitizer flags disable UBSan's `nonnull-attribute` check because
+stock nginx startup triggers it in core code before `ngx_wasm` request tests
+run.

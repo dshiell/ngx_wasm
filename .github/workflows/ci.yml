@@ -25,6 +25,30 @@ jobs:
           repository: nginx/nginx
           path: nginx
 
+      - name: Cache Wasmtime C API
+        uses: actions/cache@v4
+        with:
+          path: third_party/wasmtime-*
+          key: ${{ runner.os }}-wasmtime-${{ hashFiles('Makefile', 'scripts/fetch-wasmtime.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-wasmtime-
+
+      - name: Cache test-nginx checkout
+        uses: actions/cache@v4
+        with:
+          path: third_party/test-nginx
+          key: ${{ runner.os }}-test-nginx-${{ hashFiles('Makefile', 'scripts/fetch-test-nginx.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-test-nginx-
+
+      - name: Cache local Perl deps
+        uses: actions/cache@v4
+        with:
+          path: third_party/perl5
+          key: ${{ runner.os }}-perl5-${{ hashFiles('scripts/install-perl-deps.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-perl5-
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -36,6 +60,11 @@ jobs:
             cpanminus \
             curl \
             xz-utils
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install cpanminus
 
       - name: Fetch pinned project dependencies
         run: make deps
