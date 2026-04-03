@@ -30,6 +30,8 @@ Dependency setup:
   `wasm32-unknown-unknown` target is available for Rust guest fixtures
 - `make test` should be the single entry point for running the current test
   suite
+- `make test-sanitize` should rebuild nginx with `ASan+UBSan` and run the
+  same suite against the sanitized binary
 - `NGINX_DIR=/path/to/nginx make test` should be supported so local runs and
   CI jobs do not depend on a hardcoded sibling checkout
 
@@ -71,3 +73,5 @@ Testing principles:
 - every failure mode should assert both HTTP behavior and the relevant log text
 - config-parse failures and request-time failures should be tested separately
 - async tests should only be added once the async runtime behavior exists
+- sanitizer coverage should run at least on Linux CI, where `ASan+UBSan`
+  support is most reliable

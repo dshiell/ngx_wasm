@@ -197,11 +197,19 @@ make deps
 make test
 ```
 
+To rebuild nginx with `ASan+UBSan` and run the same suite against the
+sanitized binary:
+
+```sh
+make test-sanitize
+```
+
 If your NGINX checkout is not at `../nginx`, override it explicitly:
 
 ```sh
 make smoke NGINX_DIR=/path/to/nginx
 make test NGINX_DIR=/path/to/nginx
+make test-sanitize NGINX_DIR=/path/to/nginx
 ```
 
 For debugging, keep the `Test::Nginx` server root and logs on disk:
@@ -215,3 +223,8 @@ Use a fixed port only when you explicitly want one:
 ```sh
 TEST_NGINX_RANDOMIZE=0 TEST_NGINX_PORT=1984 make test
 ```
+
+The sanitizer target currently assumes a `clang`-compatible toolchain and is
+primarily intended for Linux CI and local Linux development. Override
+`SANITIZER_CC`, `SANITIZER_FLAGS`, `ASAN_OPTIONS`, or `UBSAN_OPTIONS` if you
+need different sanitizer settings.

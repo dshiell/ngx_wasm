@@ -17,6 +17,7 @@ TEST_NGINX_CLIENT_PORT ?=
 TEST_NGINX_SERVROOT ?=
 NGINX_DIR ?= $(abspath ../nginx)
 NGINX_BIN ?= $(NGINX_DIR)/objs/nginx
+NGINX_BUILD_JOBS ?= 2
 RUSTC ?= $(shell \
 	if [ -x "$(HOME)/.cargo/bin/rustc" ]; then \
 		echo "$(HOME)/.cargo/bin/rustc"; \
@@ -30,12 +31,16 @@ RUSTUP ?= $(shell \
 		command -v rustup; \
 	fi)
 WASM_TARGET ?= wasm32-unknown-unknown
+SANITIZER_CC ?= clang
+SANITIZER_FLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
+ASAN_OPTIONS ?= detect_leaks=1:abort_on_error=1
+UBSAN_OPTIONS ?= print_stacktrace=1:halt_on_error=1
 
 FORMAT_FILES = $(sort $(wildcard src/*.c include/*.h))
 HELLO_WORLD_DIR = wasm/hello-world
 FAILURES_DIR = wasm/failures
 
-.PHONY: format check-format wasm deps smoke test clean
+.PHONY: format check-format wasm deps nginx-sanitize smoke smoke-sanitize test test-sanitize clean
 
 format:
 ifeq ($(strip $(CLANG_FORMAT)),)
@@ -56,8 +61,20 @@ wasm:
 deps:
 	WASMTIME_VERSION=$(WASMTIME_VERSION) TEST_NGINX_REF=$(TEST_NGINX_REF) ./scripts/dev.sh
 
+nginx-sanitize:
+	cd "$(NGINX_DIR)" && \
+		auto/configure --with-cc="$(SANITIZER_CC)" \
+			--with-cc-opt='$(SANITIZER_FLAGS)' \
+			--with-ld-opt='$(SANITIZER_FLAGS)' \
+			--add-module="$(CURDIR)"
+	$(MAKE) -C "$(NGINX_DIR)" -j"$(NGINX_BUILD_JOBS)"
+
 smoke:
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/smoke-content-by-wasm.sh
+
+smoke-sanitize: wasm nginx-sanitize
+	ASAN_OPTIONS="$(ASAN_OPTIONS)" UBSAN_OPTIONS="$(UBSAN_OPTIONS)" \
+		$(MAKE) smoke NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)"
 
 test: wasm
 ifeq ($(wildcard $(TEST_NGINX_PERL_LIB)/Test/Nginx/Socket.pm),)
@@ -88,6 +105,10 @@ endif
 			printf '  metadata: %s\n' "$$info_file"; \
 		fi; \
 	fi
+
+test-sanitize: wasm nginx-sanitize
+	ASAN_OPTIONS="$(ASAN_OPTIONS)" UBSAN_OPTIONS="$(UBSAN_OPTIONS)" \
+		$(MAKE) test NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)"
 
 clean:
 	$(MAKE) -C $(HELLO_WORLD_DIR) clean

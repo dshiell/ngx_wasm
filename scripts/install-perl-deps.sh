@@ -11,6 +11,7 @@ PERL_MODULES=(
     Test::LongString
     IPC::Run
     List::MoreUtils
+    HTTP::Message
 )
 
 mkdir -p "${INSTALL_BASE}"
