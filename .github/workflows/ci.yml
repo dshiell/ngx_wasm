@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout ngx_wasm
+        uses: actions/checkout@v4
+
+      - name: Checkout nginx
+        uses: actions/checkout@v4
+        with:
+          repository: nginx/nginx
+          path: nginx
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            clang-format \
+            lld \
+            perl \
+            cpanminus \
+            curl \
+            xz-utils \
+            libtest-base-perl \
+            libtext-diff-perl \
+            libtest-longstring-perl \
+            libipc-run-perl \
+            liblist-moreutils-perl
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm lld cpanminus
+          cpanm --notest --local-lib-contained "$HOME/perl5" \
+            Test::Base \
+            Text::Diff \
+            Test::LongString \
+            IPC::Run \
+            List::MoreUtils
+
+      - name: Configure macOS environment
+        if: runner.os == 'macOS'
+        run: |
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          echo "$HOME/perl5/bin" >> "$GITHUB_PATH"
+          echo "PERL5LIB=$HOME/perl5/lib/perl5${PERL5LIB:+:$PERL5LIB}" >> "$GITHUB_ENV"
+
+      - name: Fetch pinned project dependencies
+        run: make deps
+
+      - name: Check formatting
+        run: make check-format
+
+      - name: Lint shell scripts
+        run: bash -n scripts/*.sh
+
+      - name: Lint Perl test files
+        run: |
+          perl -c t/lib/TestWasm.pm
+          PERL5LIB="third_party/test-nginx/lib:t/lib${PERL5LIB:+:$PERL5LIB}" \
+            perl -c t/001-content-basic.t
+          PERL5LIB="third_party/test-nginx/lib:t/lib${PERL5LIB:+:$PERL5LIB}" \
+            perl -c t/002-content-failures.t
+
+      - name: Build nginx with ngx_wasm
+        working-directory: nginx
+        run: |
+          auto/configure --add-module="${GITHUB_WORKSPACE}"
+          make -j2
+
+      - name: Build guest wasm modules
+        run: make wasm
+
+      - name: Run smoke test
+        run: make smoke NGINX_DIR="${GITHUB_WORKSPACE}/nginx"
+
+      - name: Run Test::Nginx suite
+        run: make test NGINX_DIR="${GITHUB_WORKSPACE}/nginx"

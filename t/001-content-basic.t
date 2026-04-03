@@ -2,11 +2,11 @@ use strict;
 use warnings;
 
 use lib 't/lib';
-use TestWasm qw(hello_world_wasm);
+use TestWasm ();
 use Test::Nginx::Socket -Base;
 
 repeat_each(1);
-plan tests => repeat_each() * blocks();
+plan tests => repeat_each() * blocks() * 2;
 
 our $HttpConfig = '';
 
@@ -18,7 +18,7 @@ __DATA__
 --- config eval
 qq{
     location /wasm {
-        content_by_wasm @{[ hello_world_wasm() ]} on_content;
+        content_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
     }
 }
 --- request

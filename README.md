@@ -81,9 +81,9 @@ Build/runtime dependencies for the current implementation:
 
 Optional example guest build dependencies:
 
-- a wasm-capable `clang`
-- `lld`/`wasm-ld` for linking guest `.wasm` examples
+- Rust with the `wasm32-unknown-unknown` target for Rust guest fixtures
 - Perl + `prove` for the `Test::Nginx` test suite
+- `cpanm` or `cpan` for installing Perl test dependencies via `make deps`
 
 ## Performance
 
@@ -98,7 +98,9 @@ The long-term goal is to publish comparative measurements covering:
 
 ## Quickstart
 
-Fetch the pinned Wasmtime C API release for the current macOS/Linux platform:
+Fetch the pinned Wasmtime C API release, a local `test-nginx` checkout, the
+Rust `stable` toolchain with `wasm32-unknown-unknown`, and Perl test
+dependencies:
 
 ```sh
 make deps
@@ -154,19 +156,25 @@ Build it with:
 make wasm
 ```
 
-If needed, override the toolchain:
+`make wasm` builds the Rust guest fixtures with `rustc --target
+wasm32-unknown-unknown`.
+
+If needed, override the Rust toolchain explicitly:
 
 ```sh
-make CC=/path/to/clang wasm
-make CC=/path/to/clang WASM_LD=/path/to/wasm-ld wasm
+make RUSTC=/path/to/rustc wasm
+make RUSTC=/path/to/rustc RUSTUP=/path/to/rustup wasm
 ```
 
-On macOS with Homebrew:
+If the target is missing:
 
 ```sh
-brew install llvm lld
-make CC=$(brew --prefix llvm)/bin/clang WASM_LD=$(brew --prefix lld)/bin/wasm-ld wasm
+rustup target add wasm32-unknown-unknown
 ```
+
+`make deps` also installs `rustup` when needed and ensures the Rust `stable`
+toolchain has the `wasm32-unknown-unknown` target available for Rust-based
+guest fixtures.
 
 ## Documentation
 
@@ -187,4 +195,23 @@ Install development dependencies and run the current test suite:
 ```sh
 make deps
 make test
+```
+
+If your NGINX checkout is not at `../nginx`, override it explicitly:
+
+```sh
+make smoke NGINX_DIR=/path/to/nginx
+make test NGINX_DIR=/path/to/nginx
+```
+
+For debugging, keep the `Test::Nginx` server root and logs on disk:
+
+```sh
+TEST_NGINX_NO_CLEAN=1 make test
+```
+
+Use a fixed port only when you explicitly want one:
+
+```sh
+TEST_NGINX_RANDOMIZE=0 TEST_NGINX_PORT=1984 make test
 ```

@@ -2,16 +2,11 @@ use strict;
 use warnings;
 
 use lib 't/lib';
-use TestWasm qw(
-    missing_export_wasm
-    missing_memory_wasm
-    guest_trap_wasm
-    nonzero_return_wasm
-);
+use TestWasm ();
 use Test::Nginx::Socket -Base;
 
 repeat_each(1);
-plan tests => repeat_each() * blocks();
+plan tests => repeat_each() * blocks() * 2;
 
 our $HttpConfig = '';
 
@@ -23,7 +18,7 @@ __DATA__
 --- config eval
 qq{
     location /wasm {
-        content_by_wasm @{[ missing_export_wasm() ]} on_content;
+        content_by_wasm @{[ TestWasm::missing_export_wasm() ]} on_content;
     }
 }
 --- request
@@ -37,21 +32,21 @@ qr/export "on_content" not found or not a function/
 --- config eval
 qq{
     location /wasm {
-        content_by_wasm @{[ missing_memory_wasm() ]} on_content;
+        content_by_wasm @{[ TestWasm::missing_memory_wasm() ]} on_content;
     }
 }
 --- request
 GET /wasm
 --- error_code: 500
 --- error_log eval
-qr/guest trapped/
+qr/guest memory export not found/
 
 
 === TEST 3: guest trap
 --- config eval
 qq{
     location /wasm {
-        content_by_wasm @{[ guest_trap_wasm() ]} on_content;
+        content_by_wasm @{[ TestWasm::guest_trap_wasm() ]} on_content;
     }
 }
 --- request
@@ -65,7 +60,7 @@ qr/guest trapped/
 --- config eval
 qq{
     location /wasm {
-        content_by_wasm @{[ nonzero_return_wasm() ]} on_content;
+        content_by_wasm @{[ TestWasm::nonzero_return_wasm() ]} on_content;
     }
 }
 --- request

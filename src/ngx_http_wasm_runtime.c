@@ -480,7 +480,9 @@ static wasm_trap_t *ngx_http_wasm_runtime_get_memory(
                                     sizeof(NGX_HTTP_WASM_MEMORY_EXPORT) - 1,
                                     &item) ||
         item.kind != WASMTIME_EXTERN_MEMORY) {
-        return wasmtime_trap_new("guest memory export not found", 28);
+        return wasmtime_trap_new(
+            "guest memory export not found",
+            sizeof("guest memory export not found") - 1);
     }
 
     context = wasmtime_caller_context(caller);
@@ -489,7 +491,9 @@ static wasm_trap_t *ngx_http_wasm_runtime_get_memory(
 
     end = (uint64_t)ptr + (uint64_t)len;
     if (end > size) {
-        return wasmtime_trap_new("guest memory access out of bounds", 33);
+        return wasmtime_trap_new(
+            "guest memory access out of bounds",
+            sizeof("guest memory access out of bounds") - 1);
     }
 
     *data = base + ptr;

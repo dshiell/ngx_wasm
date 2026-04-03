@@ -39,7 +39,7 @@ sub missing_export_wasm {
 }
 
 sub missing_memory_wasm {
-    return wasm_root() . "/wasm/failures/build/missing_memory.wasm";
+    return wasm_root() . "/wasm/failures/src/missing_memory.wat";
 }
 
 sub guest_trap_wasm {

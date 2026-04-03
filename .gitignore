@@ -7,10 +7,11 @@
 *.dll
 *.a
 *.wasm
-third_party/*.tar.xz
-third_party/wasmtime-*/
+third_party/
 
 .DS_Store
 
 .vscode/
 .idea/
+
+t/servroot_*
