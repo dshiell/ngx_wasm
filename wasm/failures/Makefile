@@ -51,4 +51,4 @@ $(OUT_DIR)/nonzero_return.wasm: src/nonzero_return.rs
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
 
 clean:
-	rm -rf $(OUT_DIR) target
+	rm -rf $(OUT_DIR)

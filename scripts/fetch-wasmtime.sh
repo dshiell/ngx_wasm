@@ -39,6 +39,9 @@ ARCHIVE_BASENAME="wasmtime-v${VERSION}-${ARCH}-${PLATFORM}-c-api"
 ARCHIVE_NAME="${ARCHIVE_BASENAME}.tar.xz"
 ARCHIVE_URL="https://github.com/bytecodealliance/wasmtime/releases/download/v${VERSION}/${ARCHIVE_NAME}"
 ARCHIVE_PATH="${THIRD_PARTY_DIR}/${ARCHIVE_NAME}"
+
+mkdir -p "${THIRD_PARTY_DIR}"
+
 EXTRACT_PARENT="$(mktemp -d "${THIRD_PARTY_DIR}/wasmtime-extract.XXXXXX")"
 EXTRACTED_DIR="${EXTRACT_PARENT}/${ARCHIVE_BASENAME}"
 
@@ -47,8 +50,6 @@ cleanup() {
 }
 
 trap cleanup EXIT
-
-mkdir -p "${THIRD_PARTY_DIR}"
 
 if [ -d "${TARGET_DIR}" ] && [ "${FORCE:-0}" != "1" ]; then
     echo "Wasmtime C API already present at ${TARGET_DIR}"

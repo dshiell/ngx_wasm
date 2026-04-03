@@ -38,4 +38,4 @@ $(OUT): $(SRC)
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
 
 clean:
-	rm -rf $(OUT_DIR) target
+	rm -rf $(OUT_DIR)
