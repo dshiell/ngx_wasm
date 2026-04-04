@@ -57,7 +57,7 @@ else
 NGINX_CONFIGURE_ARGS = --add-module="$(CURDIR)"
 endif
 
-.PHONY: format check-format wasm deps nginx-build build smoke test clean
+.PHONY: format check-format wasm deps nginx-build build smoke test test-reload clean
 
 format:
 ifeq ($(strip $(CLANG_FORMAT)),)
@@ -97,6 +97,10 @@ smoke:
 test: wasm
 	NGINX_DIR="$(NGINX_DIR)" \
 	./scripts/run-tests.sh
+	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
+
+test-reload: wasm
+	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
 
 clean:
 	$(MAKE) -C $(HELLO_WORLD_DIR) clean

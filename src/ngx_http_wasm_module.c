@@ -7,7 +7,10 @@
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
 static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_wasm_install_content_handler(ngx_conf_t *cf);
+static ngx_int_t ngx_http_wasm_init_module(ngx_cycle_t *cycle);
 static ngx_int_t ngx_http_wasm_init_process(ngx_cycle_t *cycle);
 static void ngx_http_wasm_exit_process(ngx_cycle_t *cycle);
 static void *ngx_http_wasm_create_main_conf(ngx_conf_t *cf);
@@ -25,6 +28,14 @@ static ngx_command_t ngx_http_wasm_commands[] = {
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
          NGX_CONF_TAKE2,
      ngx_http_wasm_content_by,
+     NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("wasm_fuel_limit"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
+         NGX_CONF_TAKE1,
+     ngx_http_wasm_fuel_limit,
      NGX_HTTP_LOC_CONF_OFFSET,
      0,
      NULL},
@@ -51,7 +62,7 @@ ngx_module_t ngx_http_wasm_module = {
     ngx_http_wasm_commands,     /* module directives */
     NGX_HTTP_MODULE,            /* module type */
     NULL,                       /* init master */
-    NULL,                       /* init module */
+    ngx_http_wasm_init_module,  /* init module */
     ngx_http_wasm_init_process, /* init process */
     NULL,                       /* init thread */
     NULL,                       /* exit thread */
@@ -68,6 +79,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     }
 
     conf->set = NGX_CONF_UNSET;
+    conf->fuel_limit = NGX_CONF_UNSET_UINT;
 
     return conf;
 }
@@ -78,6 +90,12 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
     (void)cf;
 
     ngx_conf_merge_value(child->set, parent->set, 0);
+    ngx_conf_merge_uint_value(child->fuel_limit,
+                              parent->fuel_limit,
+                              NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT);
+    if (child->module == NULL && parent->module != NULL) {
+        child->module = parent->module;
+    }
 
     if (child->module_path.data == NULL && parent->module_path.data != NULL) {
         child->module_path = parent->module_path;
@@ -91,14 +109,34 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
 }
 
 static void *ngx_http_wasm_create_main_conf(ngx_conf_t *cf) {
-    return ngx_http_wasm_create_conf(cf);
+    ngx_http_wasm_main_conf_t *wmcf;
+
+    wmcf = ngx_pcalloc(cf->pool, sizeof(ngx_http_wasm_main_conf_t));
+    if (wmcf == NULL) {
+        return NULL;
+    }
+
+    wmcf->modules = ngx_array_create(cf->pool,
+                                     4,
+                                     sizeof(ngx_http_wasm_cached_module_t *));
+    if (wmcf->modules == NULL) {
+        return NULL;
+    }
+
+    if (ngx_http_wasm_runtime_init(cf, wmcf) != NGX_OK) {
+        return NULL;
+    }
+
+    return wmcf;
 }
 
 static char *ngx_http_wasm_init_main_conf(ngx_conf_t *cf, void *conf) {
-    ngx_http_wasm_conf_t *wmcf = conf;
+    ngx_http_wasm_main_conf_t *wmcf = conf;
 
-    if (wmcf->set == NGX_CONF_UNSET) {
-        wmcf->set = 0;
+    (void)cf;
+
+    if (wmcf->modules == NULL || wmcf->runtime == NULL) {
+        return NGX_CONF_ERROR;
     }
 
     return NGX_CONF_OK;
@@ -146,17 +184,33 @@ static ngx_int_t ngx_http_wasm_install_content_handler(ngx_conf_t *cf) {
     return NGX_OK;
 }
 
+static ngx_int_t ngx_http_wasm_init_module(ngx_cycle_t *cycle) {
+    (void)cycle;
+
+    return NGX_OK;
+}
+
 static ngx_int_t ngx_http_wasm_init_process(ngx_cycle_t *cycle) {
-    return ngx_http_wasm_runtime_init_process(cycle);
+    (void)cycle;
+
+    return NGX_OK;
 }
 
 static void ngx_http_wasm_exit_process(ngx_cycle_t *cycle) {
-    ngx_http_wasm_runtime_exit_process(cycle);
+    ngx_http_wasm_main_conf_t *wmcf;
+
+    wmcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_wasm_module);
+    if (wmcf == NULL) {
+        return;
+    }
+
+    ngx_http_wasm_runtime_destroy(wmcf);
 }
 
 static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_http_wasm_conf_t *wcf;
+    ngx_http_wasm_main_conf_t *wmcf;
     ngx_str_t *value;
 
     (void)cmd;
@@ -176,17 +230,54 @@ ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         return NGX_CONF_ERROR;
     }
 
+    wmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_wasm_module);
+    if (wmcf == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    wcf->module = ngx_http_wasm_runtime_get_or_load(cf, wmcf, &wcf->module_path);
+    if (wcf->module == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+    ngx_str_t *value;
+    ngx_int_t n;
+
+    (void)cmd;
+    wcf = conf;
+
+    value = cf->args->elts;
+    n = ngx_atoi(value[1].data, value[1].len);
+    if (n == NGX_ERROR || n < 0) {
+        ngx_conf_log_error(NGX_LOG_EMERG,
+                           cf,
+                           0,
+                           "invalid wasm_fuel_limit value \"%V\"",
+                           &value[1]);
+        return NGX_CONF_ERROR;
+    }
+
+    wcf->fuel_limit = (ngx_uint_t)n;
+
     return NGX_CONF_OK;
 }
 
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
     ngx_http_wasm_conf_t *wcf;
+    ngx_http_wasm_main_conf_t *wmcf;
     ngx_http_wasm_exec_ctx_t exec;
     ngx_int_t rc;
 
     wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
+    wmcf = ngx_http_get_module_main_conf(r, ngx_http_wasm_module);
 
-    if (wcf->set != 1) {
+    if (wcf->set != 1 || wmcf == NULL || wmcf->runtime == NULL) {
         return NGX_DECLINED;
     }
 
@@ -206,7 +297,7 @@ static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
         return rc;
     }
 
-    ngx_http_wasm_runtime_init_exec_ctx(&exec, r, wcf);
+    ngx_http_wasm_runtime_init_exec_ctx(&exec, r, wcf, wmcf->runtime);
 
     rc = ngx_http_wasm_runtime_run(&exec);
     if (rc != NGX_OK) {

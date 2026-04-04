@@ -14,6 +14,7 @@ our @EXPORT_OK = qw(
     missing_memory_wasm
     guest_trap_wasm
     nonzero_return_wasm
+    fuel_exhaust_wasm
 );
 
 sub wasm_root {
@@ -48,6 +49,10 @@ sub guest_trap_wasm {
 
 sub nonzero_return_wasm {
     return wasm_root() . "/wasm/failures/build/nonzero_return.wasm";
+}
+
+sub fuel_exhaust_wasm {
+    return wasm_root() . "/wasm/failures/src/fuel_exhaust.wat";
 }
 
 1;

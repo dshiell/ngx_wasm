@@ -77,6 +77,21 @@ location /wasm {
 }
 --- request
 GET /wasm
---- error_code: 500
+--- must_die
 --- error_log eval
 qr/failed to open module/
+
+
+=== TEST 6: fuel exhaustion interrupts guest
+--- config eval
+qq{
+    location /wasm {
+        wasm_fuel_limit 1000;
+        content_by_wasm @{[ TestWasm::fuel_exhaust_wasm() ]} on_content;
+    }
+}
+--- request
+GET /wasm
+--- error_code: 500
+--- error_log eval
+qr/guest interrupted: fuel_limit=1000/

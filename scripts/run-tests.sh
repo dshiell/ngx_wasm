@@ -67,8 +67,8 @@ export TEST_NGINX_SERVROOT
 
 test_status=0
 while IFS= read -r test_file; do
-    if ! "${PROVE_BIN}" -r "${test_file}"; then
-        test_status=$?
+    "${PROVE_BIN}" -r "${test_file}" || test_status=$?
+    if [ "${test_status}" != "0" ]; then
         break
     fi
 done < <(find "${ROOT_DIR}/t" -maxdepth 1 -type f -name '*.t' | sort)

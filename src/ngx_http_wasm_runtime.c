@@ -14,29 +14,21 @@
 #include <wasmtime/val.h>
 #include <wasmtime/wat.h>
 
-#define NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT 1000000
 #define NGX_HTTP_WASM_DEFAULT_TIMESLICE_FUEL 10000
 #define NGX_HTTP_WASM_IMPORT_MODULE "env"
 #define NGX_HTTP_WASM_MEMORY_EXPORT "memory"
-
-typedef struct {
-    ngx_queue_t queue;
+struct ngx_http_wasm_cached_module_s {
     ngx_str_t module_path;
     wasmtime_module_t *module;
-} ngx_http_wasm_cached_module_t;
+};
 
-typedef struct {
-    ngx_pool_t *pool;
+struct ngx_http_wasm_runtime_state_s {
     ngx_log_t *log;
     wasm_engine_t *engine;
     wasmtime_linker_t *linker;
-    ngx_queue_t modules;
-    ngx_uint_t initialized;
-} ngx_http_wasm_runtime_state_t;
+    unsigned destroyed:1;
+};
 
-static ngx_http_wasm_runtime_state_t ngx_http_wasm_runtime;
-
-static void ngx_http_wasm_runtime_reset(void);
 static ngx_int_t
 ngx_http_wasm_runtime_define_host_funcs(ngx_http_wasm_runtime_state_t *rt);
 static ngx_int_t
@@ -45,15 +37,15 @@ ngx_http_wasm_runtime_define_func(ngx_http_wasm_runtime_state_t *rt,
                                   wasm_functype_t *ty,
                                   wasmtime_func_callback_t cb);
 static ngx_http_wasm_cached_module_t *
-ngx_http_wasm_runtime_find_module(const ngx_str_t *path);
-static ngx_http_wasm_cached_module_t *
-ngx_http_wasm_runtime_load_module(ngx_http_wasm_exec_ctx_t *ctx);
+ngx_http_wasm_runtime_find_module(ngx_http_wasm_main_conf_t *wmcf,
+                                  const ngx_str_t *path);
 static ngx_int_t ngx_http_wasm_runtime_read_file(ngx_pool_t *pool,
                                                  ngx_log_t *log,
                                                  const u_char *path,
                                                  ngx_str_t *out);
 static wasmtime_error_t *
-ngx_http_wasm_runtime_compile_module(const ngx_str_t *bytes,
+ngx_http_wasm_runtime_compile_module(ngx_http_wasm_runtime_state_t *rt,
+                                     const ngx_str_t *bytes,
                                      wasmtime_module_t **module);
 static void ngx_http_wasm_runtime_log_error(ngx_log_t *log,
                                             const char *context,
@@ -61,6 +53,9 @@ static void ngx_http_wasm_runtime_log_error(ngx_log_t *log,
 static void ngx_http_wasm_runtime_log_trap(ngx_log_t *log,
                                            const char *context,
                                            wasm_trap_t *trap);
+static ngx_int_t ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
+                                                   wasmtime_context_t *context,
+                                                   const char *phase);
 static wasm_trap_t *ngx_http_wasm_runtime_get_memory(wasmtime_caller_t *caller,
                                                      uint32_t ptr,
                                                      uint32_t len,
@@ -86,114 +81,107 @@ static wasm_trap_t *ngx_http_wasm_host_resp_write(void *env,
                                                   wasmtime_val_t *results,
                                                   size_t nresults);
 
-ngx_int_t ngx_http_wasm_runtime_init_process(ngx_cycle_t *cycle) {
+ngx_int_t ngx_http_wasm_runtime_init(ngx_conf_t *cf,
+                                     ngx_http_wasm_main_conf_t *wmcf) {
     wasm_config_t *config;
+    ngx_http_wasm_runtime_state_t *rt;
 
-    if (ngx_http_wasm_runtime.initialized) {
+    if (wmcf->runtime != NULL) {
         return NGX_OK;
     }
 
-    ngx_memzero(&ngx_http_wasm_runtime, sizeof(ngx_http_wasm_runtime));
-
-    ngx_http_wasm_runtime.pool = ngx_create_pool(4096, cycle->log);
-    if (ngx_http_wasm_runtime.pool == NULL) {
+    rt = ngx_pcalloc(cf->pool, sizeof(*rt));
+    if (rt == NULL) {
         return NGX_ERROR;
     }
 
-    ngx_http_wasm_runtime.log = cycle->log;
-    ngx_queue_init(&ngx_http_wasm_runtime.modules);
+    rt->log = cf->log;
+    wmcf->runtime = rt;
 
     config = wasm_config_new();
     if (config == NULL) {
         ngx_log_error(NGX_LOG_ERR,
-                      cycle->log,
+                      cf->log,
                       0,
                       "ngx_wasm: failed to create Wasmtime config");
-        ngx_http_wasm_runtime_exit_process(cycle);
         return NGX_ERROR;
     }
 
     wasmtime_config_consume_fuel_set(config, true);
+#if (NGX_DARWIN)
+    wasmtime_config_macos_use_mach_ports_set(config, false);
+#endif
 
-    ngx_http_wasm_runtime.engine = wasm_engine_new_with_config(config);
-    if (ngx_http_wasm_runtime.engine == NULL) {
+    rt->engine = wasm_engine_new_with_config(config);
+    if (rt->engine == NULL) {
         ngx_log_error(NGX_LOG_ERR,
-                      cycle->log,
+                      cf->log,
                       0,
                       "ngx_wasm: failed to create Wasmtime engine");
-        ngx_http_wasm_runtime_exit_process(cycle);
         return NGX_ERROR;
     }
 
-    ngx_http_wasm_runtime.linker =
-        wasmtime_linker_new(ngx_http_wasm_runtime.engine);
-    if (ngx_http_wasm_runtime.linker == NULL) {
+    rt->linker = wasmtime_linker_new(rt->engine);
+    if (rt->linker == NULL) {
         ngx_log_error(NGX_LOG_ERR,
-                      cycle->log,
+                      cf->log,
                       0,
                       "ngx_wasm: failed to create Wasmtime linker");
-        ngx_http_wasm_runtime_exit_process(cycle);
         return NGX_ERROR;
     }
 
-    if (ngx_http_wasm_runtime_define_host_funcs(&ngx_http_wasm_runtime) !=
-        NGX_OK) {
-        ngx_http_wasm_runtime_exit_process(cycle);
+    if (ngx_http_wasm_runtime_define_host_funcs(rt) != NGX_OK) {
         return NGX_ERROR;
     }
-
-    ngx_http_wasm_runtime.initialized = 1;
 
     return NGX_OK;
 }
 
-void ngx_http_wasm_runtime_exit_process(ngx_cycle_t *cycle) {
-    ngx_queue_t *q;
+void ngx_http_wasm_runtime_destroy(ngx_http_wasm_main_conf_t *wmcf) {
+    ngx_http_wasm_cached_module_t **modules;
+    ngx_http_wasm_runtime_state_t *rt;
+    ngx_uint_t i;
 
-    (void)cycle;
-
-    if (ngx_http_wasm_runtime.linker != NULL) {
-        wasmtime_linker_delete(ngx_http_wasm_runtime.linker);
+    if (wmcf == NULL || wmcf->runtime == NULL || wmcf->runtime->destroyed) {
+        return;
     }
 
-    for (q = ngx_queue_head(&ngx_http_wasm_runtime.modules);
-         q != ngx_queue_sentinel(&ngx_http_wasm_runtime.modules);) {
-        ngx_http_wasm_cached_module_t *entry;
-        ngx_queue_t *next;
+    rt = wmcf->runtime;
 
-        next = ngx_queue_next(q);
-        entry = ngx_queue_data(q, ngx_http_wasm_cached_module_t, queue);
-
-        if (entry->module != NULL) {
-            wasmtime_module_delete(entry->module);
+    if (wmcf->modules != NULL) {
+        modules = wmcf->modules->elts;
+        for (i = 0; i < wmcf->modules->nelts; i++) {
+            if (modules[i] != NULL && modules[i]->module != NULL) {
+                wasmtime_module_delete(modules[i]->module);
+                modules[i]->module = NULL;
+            }
         }
-
-        q = next;
     }
 
-    if (ngx_http_wasm_runtime.engine != NULL) {
-        wasm_engine_delete(ngx_http_wasm_runtime.engine);
+    if (rt->linker != NULL) {
+        wasmtime_linker_delete(rt->linker);
+        rt->linker = NULL;
     }
 
-    if (ngx_http_wasm_runtime.pool != NULL) {
-        ngx_destroy_pool(ngx_http_wasm_runtime.pool);
+    if (rt->engine != NULL) {
+        wasm_engine_delete(rt->engine);
+        rt->engine = NULL;
     }
 
-    ngx_http_wasm_runtime_reset();
-}
-
-static void ngx_http_wasm_runtime_reset(void) {
-    ngx_memzero(&ngx_http_wasm_runtime, sizeof(ngx_http_wasm_runtime));
+    rt->destroyed = 1;
 }
 
 void ngx_http_wasm_runtime_init_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx,
                                          ngx_http_request_t *r,
-                                         ngx_http_wasm_conf_t *conf) {
+                                         ngx_http_wasm_conf_t *conf,
+                                         ngx_http_wasm_runtime_state_t *runtime) {
     ngx_memzero(ctx, sizeof(*ctx));
 
     ctx->request = r;
     ctx->conf = conf;
-    ctx->fuel_limit = NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT;
+    ctx->runtime = runtime;
+    ctx->fuel_limit = conf->fuel_limit;
+    ctx->fuel_remaining = conf->fuel_limit;
 
     ngx_http_wasm_abi_init(&ctx->abi, r);
 }
@@ -261,71 +249,82 @@ ngx_http_wasm_runtime_define_func(ngx_http_wasm_runtime_state_t *rt,
 }
 
 static ngx_http_wasm_cached_module_t *
-ngx_http_wasm_runtime_find_module(const ngx_str_t *path) {
-    ngx_queue_t *q;
+ngx_http_wasm_runtime_find_module(ngx_http_wasm_main_conf_t *wmcf,
+                                  const ngx_str_t *path) {
+    ngx_http_wasm_cached_module_t **modules;
+    ngx_uint_t i;
 
-    for (q = ngx_queue_head(&ngx_http_wasm_runtime.modules);
-         q != ngx_queue_sentinel(&ngx_http_wasm_runtime.modules);
-         q = ngx_queue_next(q)) {
-        ngx_http_wasm_cached_module_t *entry;
+    if (wmcf->modules == NULL) {
+        return NULL;
+    }
 
-        entry = ngx_queue_data(q, ngx_http_wasm_cached_module_t, queue);
-
-        if (entry->module_path.len == path->len &&
-            ngx_strncmp(entry->module_path.data, path->data, path->len) == 0) {
-            return entry;
+    modules = wmcf->modules->elts;
+    for (i = 0; i < wmcf->modules->nelts; i++) {
+        if (modules[i]->module_path.len == path->len &&
+            ngx_strncmp(modules[i]->module_path.data, path->data, path->len) ==
+                0) {
+            return modules[i];
         }
     }
 
     return NULL;
 }
 
-static ngx_http_wasm_cached_module_t *
-ngx_http_wasm_runtime_load_module(ngx_http_wasm_exec_ctx_t *ctx) {
+ngx_http_wasm_cached_module_t *
+ngx_http_wasm_runtime_get_or_load(ngx_conf_t *cf,
+                                  ngx_http_wasm_main_conf_t *wmcf,
+                                  ngx_str_t *path) {
     ngx_http_wasm_cached_module_t *entry;
+    ngx_http_wasm_cached_module_t **slot;
     ngx_str_t bytes;
     wasmtime_error_t *error;
-    u_char *path;
+    u_char *module_path;
 
-    entry = ngx_http_wasm_runtime_find_module(&ctx->conf->module_path);
+    entry = ngx_http_wasm_runtime_find_module(wmcf, path);
     if (entry != NULL) {
         return entry;
     }
 
-    entry = ngx_pcalloc(ngx_http_wasm_runtime.pool, sizeof(*entry));
+    entry = ngx_pcalloc(cf->pool, sizeof(*entry));
     if (entry == NULL) {
         return NULL;
     }
 
-    path =
-        ngx_pnalloc(ngx_http_wasm_runtime.pool, ctx->conf->module_path.len + 1);
-    if (path == NULL) {
+    module_path = ngx_pnalloc(cf->pool, path->len + 1);
+    if (module_path == NULL) {
         return NULL;
     }
 
-    ngx_memcpy(path, ctx->conf->module_path.data, ctx->conf->module_path.len);
-    path[ctx->conf->module_path.len] = '\0';
+    ngx_memcpy(module_path, path->data, path->len);
+    module_path[path->len] = '\0';
+    entry->module_path.data = module_path;
+    entry->module_path.len = path->len;
 
-    entry->module_path.data = path;
-    entry->module_path.len = ctx->conf->module_path.len;
-
-    if (ngx_http_wasm_runtime_read_file(ngx_http_wasm_runtime.pool,
-                                        ctx->request->connection->log,
-                                        path,
+    if (ngx_http_wasm_runtime_read_file(cf->pool,
+                                        cf->log,
+                                        entry->module_path.data,
                                         &bytes) != NGX_OK) {
         return NULL;
     }
 
-    error = ngx_http_wasm_runtime_compile_module(&bytes, &entry->module);
+    error = ngx_http_wasm_runtime_compile_module(wmcf->runtime,
+                                                 &bytes,
+                                                 &entry->module);
     if (error != NULL) {
-        ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
+        ngx_http_wasm_runtime_log_error(cf->log,
                                         "failed to compile guest module",
                                         error);
         return NULL;
     }
 
-    ngx_queue_insert_tail(&ngx_http_wasm_runtime.modules, &entry->queue);
+    slot = ngx_array_push(wmcf->modules);
+    if (slot == NULL) {
+        wasmtime_module_delete(entry->module);
+        entry->module = NULL;
+        return NULL;
+    }
 
+    *slot = entry;
     return entry;
 }
 
@@ -402,7 +401,8 @@ static ngx_int_t ngx_http_wasm_runtime_read_file(ngx_pool_t *pool,
 }
 
 static wasmtime_error_t *
-ngx_http_wasm_runtime_compile_module(const ngx_str_t *bytes,
+ngx_http_wasm_runtime_compile_module(ngx_http_wasm_runtime_state_t *rt,
+                                     const ngx_str_t *bytes,
                                      wasmtime_module_t **module) {
     static u_char wasm_magic[] = {0x00, 0x61, 0x73, 0x6d};
     wasm_byte_vec_t binary;
@@ -410,8 +410,7 @@ ngx_http_wasm_runtime_compile_module(const ngx_str_t *bytes,
 
     if (bytes->len >= sizeof(wasm_magic) &&
         ngx_memcmp(bytes->data, wasm_magic, sizeof(wasm_magic)) == 0) {
-        return wasmtime_module_new(
-            ngx_http_wasm_runtime.engine, bytes->data, bytes->len, module);
+        return wasmtime_module_new(rt->engine, bytes->data, bytes->len, module);
     }
 
     error = wasmtime_wat2wasm((const char *)bytes->data, bytes->len, &binary);
@@ -419,7 +418,7 @@ ngx_http_wasm_runtime_compile_module(const ngx_str_t *bytes,
         return error;
     }
 
-    error = wasmtime_module_new(ngx_http_wasm_runtime.engine,
+    error = wasmtime_module_new(rt->engine,
                                 (uint8_t *)binary.data,
                                 binary.size,
                                 module);
@@ -474,6 +473,26 @@ static void ngx_http_wasm_runtime_log_trap(ngx_log_t *log,
 
     wasm_byte_vec_delete(&message);
     wasm_trap_delete(trap);
+}
+
+static ngx_int_t
+ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
+                                  wasmtime_context_t *context,
+                                  const char *phase) {
+    uint64_t fuel;
+    wasmtime_error_t *error;
+
+    error = wasmtime_context_get_fuel(context, &fuel);
+    if (error != NULL) {
+        ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
+                                        phase,
+                                        error);
+        return NGX_ERROR;
+    }
+
+    ctx->fuel_remaining = fuel;
+
+    return NGX_OK;
 }
 
 static wasm_trap_t *ngx_http_wasm_runtime_bad_signature(const char *name) {
@@ -604,6 +623,7 @@ static wasm_trap_t *ngx_http_wasm_host_resp_write(void *env,
 
 ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     ngx_http_wasm_cached_module_t *module;
+    ngx_http_wasm_runtime_state_t *rt;
     wasmtime_store_t *store;
     wasmtime_context_t *context;
     wasmtime_instance_t instance;
@@ -612,7 +632,8 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     wasmtime_error_t *error;
     wasm_trap_t *trap;
 
-    if (!ngx_http_wasm_runtime.initialized) {
+    rt = ctx->runtime;
+    if (rt == NULL || rt->destroyed || rt->engine == NULL || rt->linker == NULL) {
         ngx_log_error(NGX_LOG_ERR,
                       ctx->request->connection->log,
                       0,
@@ -620,12 +641,17 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         return NGX_ERROR;
     }
 
-    module = ngx_http_wasm_runtime_load_module(ctx);
-    if (module == NULL) {
+    module = ctx->conf->module;
+    if (module == NULL || module->module == NULL) {
+        ngx_log_error(NGX_LOG_ERR,
+                      ctx->request->connection->log,
+                      0,
+                      "ngx_wasm: module \"%V\" not preloaded",
+                      &ctx->conf->module_path);
         return NGX_ERROR;
     }
 
-    store = wasmtime_store_new(ngx_http_wasm_runtime.engine, ctx, NULL);
+    store = wasmtime_store_new(rt->engine, ctx, NULL);
     if (store == NULL) {
         ngx_log_error(NGX_LOG_ERR,
                       ctx->request->connection->log,
@@ -643,8 +669,15 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         return NGX_ERROR;
     }
 
+    if (ngx_http_wasm_runtime_update_fuel(
+            ctx, context, "failed to read remaining fuel after setup") !=
+        NGX_OK) {
+        wasmtime_store_delete(store);
+        return NGX_ERROR;
+    }
+
     trap = NULL;
-    error = wasmtime_linker_instantiate(ngx_http_wasm_runtime.linker,
+    error = wasmtime_linker_instantiate(rt->linker,
                                         context,
                                         module->module,
                                         &instance,
@@ -692,8 +725,41 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     }
 
     if (trap != NULL) {
+        wasmtime_trap_code_t code;
+
+        if (wasmtime_trap_code(trap, &code) &&
+            (code == WASMTIME_TRAP_CODE_OUT_OF_FUEL ||
+             code == WASMTIME_TRAP_CODE_INTERRUPT)) {
+            if (ngx_http_wasm_runtime_update_fuel(
+                    ctx,
+                    context,
+                    "failed to read remaining fuel after interruption") !=
+                NGX_OK) {
+                wasmtime_store_delete(store);
+                return NGX_ERROR;
+            }
+
+            ngx_log_error(
+                NGX_LOG_ERR,
+                ctx->request->connection->log,
+                0,
+                "ngx_wasm: guest interrupted: fuel_limit=%uL fuel_remaining=%uL",
+                (unsigned long long)ctx->fuel_limit,
+                (unsigned long long)ctx->fuel_remaining);
+            wasm_trap_delete(trap);
+            wasmtime_store_delete(store);
+            return NGX_ERROR;
+        }
+
         ngx_http_wasm_runtime_log_trap(
             ctx->request->connection->log, "guest trapped", trap);
+        wasmtime_store_delete(store);
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_update_fuel(
+            ctx, context, "failed to read remaining fuel after guest call") !=
+        NGX_OK) {
         wasmtime_store_delete(store);
         return NGX_ERROR;
     }
