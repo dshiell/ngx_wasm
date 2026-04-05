@@ -6,7 +6,7 @@ use TestWasm ();
 use Test::Nginx::Socket -Base;
 
 repeat_each(1);
-plan tests => repeat_each() * 8;
+plan tests => repeat_each() * 10;
 
 our $HttpConfig = '';
 
@@ -66,3 +66,19 @@ qq{
     "hello from guest wasm\n",
     "hello from guest wasm\n",
 ]
+
+
+=== TEST 4: content_by_wasm honors explicit timeslice fuel
+--- config eval
+qq{
+    location /wasm {
+        wasm_fuel_limit 1000000;
+        wasm_timeslice_fuel 1000000;
+        content_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
+    }
+}
+--- request
+GET /wasm
+--- error_code: 200
+--- response_body
+hello from guest wasm

@@ -8,6 +8,7 @@
 #include <ngx_http_wasm_abi.h>
 
 #define NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT 1000000
+#define NGX_HTTP_WASM_DEFAULT_TIMESLICE_FUEL 10000
 
 typedef struct ngx_http_wasm_cached_module_s ngx_http_wasm_cached_module_t;
 typedef struct ngx_http_wasm_runtime_state_s ngx_http_wasm_runtime_state_t;
@@ -20,6 +21,7 @@ typedef struct {
 typedef struct {
     ngx_flag_t set;
     ngx_uint_t fuel_limit;
+    ngx_uint_t timeslice_fuel;
     ngx_http_wasm_cached_module_t *module;
     ngx_str_t module_path;
     ngx_str_t export_name;
@@ -31,20 +33,20 @@ typedef struct {
     ngx_http_wasm_runtime_state_t *runtime;
     ngx_http_wasm_abi_ctx_t abi;
     uint64_t fuel_limit;
+    uint64_t timeslice_fuel;
     uint64_t fuel_remaining;
 } ngx_http_wasm_exec_ctx_t;
 
 ngx_int_t ngx_http_wasm_runtime_init(ngx_conf_t *cf,
                                      ngx_http_wasm_main_conf_t *wmcf);
-ngx_http_wasm_cached_module_t *
-ngx_http_wasm_runtime_get_or_load(ngx_conf_t *cf,
-                                  ngx_http_wasm_main_conf_t *wmcf,
-                                  ngx_str_t *path);
+ngx_http_wasm_cached_module_t *ngx_http_wasm_runtime_get_or_load(
+    ngx_conf_t *cf, ngx_http_wasm_main_conf_t *wmcf, ngx_str_t *path);
 void ngx_http_wasm_runtime_destroy(ngx_http_wasm_main_conf_t *wmcf);
-void ngx_http_wasm_runtime_init_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx,
-                                         ngx_http_request_t *r,
-                                         ngx_http_wasm_conf_t *conf,
-                                         ngx_http_wasm_runtime_state_t *runtime);
+void ngx_http_wasm_runtime_init_exec_ctx(
+    ngx_http_wasm_exec_ctx_t *ctx,
+    ngx_http_request_t *r,
+    ngx_http_wasm_conf_t *conf,
+    ngx_http_wasm_runtime_state_t *runtime);
 ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx);
 
 #endif /* _NGX_HTTP_WASM_RUNTIME_H_INCLUDED_ */

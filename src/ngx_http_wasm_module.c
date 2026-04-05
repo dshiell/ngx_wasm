@@ -9,6 +9,8 @@ static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_timeslice_fuel(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_wasm_install_content_handler(ngx_conf_t *cf);
 static ngx_int_t ngx_http_wasm_init_module(ngx_cycle_t *cycle);
 static ngx_int_t ngx_http_wasm_init_process(ngx_cycle_t *cycle);
@@ -36,6 +38,14 @@ static ngx_command_t ngx_http_wasm_commands[] = {
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
          NGX_CONF_TAKE1,
      ngx_http_wasm_fuel_limit,
+     NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("wasm_timeslice_fuel"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
+         NGX_CONF_TAKE1,
+     ngx_http_wasm_timeslice_fuel,
      NGX_HTTP_LOC_CONF_OFFSET,
      0,
      NULL},
@@ -80,6 +90,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
 
     conf->set = NGX_CONF_UNSET;
     conf->fuel_limit = NGX_CONF_UNSET_UINT;
+    conf->timeslice_fuel = NGX_CONF_UNSET_UINT;
 
     return conf;
 }
@@ -93,6 +104,9 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
     ngx_conf_merge_uint_value(child->fuel_limit,
                               parent->fuel_limit,
                               NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT);
+    ngx_conf_merge_uint_value(child->timeslice_fuel,
+                              parent->timeslice_fuel,
+                              NGX_HTTP_WASM_DEFAULT_TIMESLICE_FUEL);
     if (child->module == NULL && parent->module != NULL) {
         child->module = parent->module;
     }
@@ -116,9 +130,8 @@ static void *ngx_http_wasm_create_main_conf(ngx_conf_t *cf) {
         return NULL;
     }
 
-    wmcf->modules = ngx_array_create(cf->pool,
-                                     4,
-                                     sizeof(ngx_http_wasm_cached_module_t *));
+    wmcf->modules =
+        ngx_array_create(cf->pool, 4, sizeof(ngx_http_wasm_cached_module_t *));
     if (wmcf->modules == NULL) {
         return NULL;
     }
@@ -235,7 +248,8 @@ ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         return NGX_CONF_ERROR;
     }
 
-    wcf->module = ngx_http_wasm_runtime_get_or_load(cf, wmcf, &wcf->module_path);
+    wcf->module =
+        ngx_http_wasm_runtime_get_or_load(cf, wmcf, &wcf->module_path);
     if (wcf->module == NULL) {
         return NGX_CONF_ERROR;
     }
@@ -264,6 +278,31 @@ ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     }
 
     wcf->fuel_limit = (ngx_uint_t)n;
+
+    return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_wasm_timeslice_fuel(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+    ngx_str_t *value;
+    ngx_int_t n;
+
+    (void)cmd;
+    wcf = conf;
+
+    value = cf->args->elts;
+    n = ngx_atoi(value[1].data, value[1].len);
+    if (n == NGX_ERROR || n <= 0) {
+        ngx_conf_log_error(NGX_LOG_EMERG,
+                           cf,
+                           0,
+                           "invalid wasm_timeslice_fuel value \"%V\"",
+                           &value[1]);
+        return NGX_CONF_ERROR;
+    }
+
+    wcf->timeslice_fuel = (ngx_uint_t)n;
 
     return NGX_CONF_OK;
 }
