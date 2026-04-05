@@ -21,6 +21,14 @@ struct ngx_http_wasm_cached_module_s {
     wasmtime_module_t *module;
 };
 
+struct ngx_http_wasm_resume_state_s {
+    wasmtime_store_t *store;
+    wasmtime_instance_t instance;
+    wasmtime_func_t func;
+    unsigned instance_ready : 1;
+    unsigned func_ready : 1;
+};
+
 struct ngx_http_wasm_runtime_state_s {
     ngx_log_t *log;
     wasm_engine_t *engine;
@@ -79,6 +87,12 @@ static wasm_trap_t *ngx_http_wasm_host_resp_write(void *env,
                                                   size_t nargs,
                                                   wasmtime_val_t *results,
                                                   size_t nresults);
+static wasm_trap_t *ngx_http_wasm_host_yield(void *env,
+                                             wasmtime_caller_t *caller,
+                                             const wasmtime_val_t *args,
+                                             size_t nargs,
+                                             wasmtime_val_t *results,
+                                             size_t nresults);
 
 ngx_int_t ngx_http_wasm_runtime_init(ngx_conf_t *cf,
                                      ngx_http_wasm_main_conf_t *wmcf) {
@@ -181,8 +195,26 @@ void ngx_http_wasm_runtime_init_exec_ctx(
     ctx->fuel_limit = conf->fuel_limit;
     ctx->timeslice_fuel = conf->timeslice_fuel;
     ctx->fuel_remaining = conf->fuel_limit;
+    ctx->state = NGX_HTTP_WASM_EXEC_READY;
+    ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_NONE;
+    ctx->resume_state = NULL;
+    ctx->yielded = 0;
 
     ngx_http_wasm_abi_init(&ctx->abi, r);
+}
+
+void ngx_http_wasm_runtime_cleanup_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx) {
+    if (ctx == NULL || ctx->resume_state == NULL) {
+        return;
+    }
+
+    if (ctx->resume_state->store != NULL) {
+        wasmtime_store_delete(ctx->resume_state->store);
+        ctx->resume_state->store = NULL;
+    }
+
+    ctx->resume_state->instance_ready = 0;
+    ctx->resume_state->func_ready = 0;
 }
 
 static ngx_int_t
@@ -214,6 +246,14 @@ ngx_http_wasm_runtime_define_host_funcs(ngx_http_wasm_runtime_state_t *rt) {
                                   wasm_valtype_new(WASM_I32),
                                   wasm_valtype_new(WASM_I32)),
             ngx_http_wasm_host_resp_write) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_yield",
+            wasm_functype_new_0_1(wasm_valtype_new(WASM_I32)),
+            ngx_http_wasm_host_yield) != NGX_OK) {
         return NGX_ERROR;
     }
 
@@ -611,20 +651,46 @@ static wasm_trap_t *ngx_http_wasm_host_resp_write(void *env,
     return NULL;
 }
 
+static wasm_trap_t *ngx_http_wasm_host_yield(void *env,
+                                             wasmtime_caller_t *caller,
+                                             const wasmtime_val_t *args,
+                                             size_t nargs,
+                                             wasmtime_val_t *results,
+                                             size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+
+    (void)env;
+
+    if (nargs != 0 || nresults != 1) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_yield signature");
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    ctx->yielded = 1;
+
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 = NGX_HTTP_WASM_OK;
+
+    return NULL;
+}
+
 ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     ngx_http_wasm_cached_module_t *module;
+    ngx_http_wasm_resume_state_t *resume;
     ngx_http_wasm_runtime_state_t *rt;
-    wasmtime_store_t *store;
     wasmtime_context_t *context;
-    wasmtime_instance_t instance;
     wasmtime_extern_t item;
     wasmtime_val_t result;
     wasmtime_error_t *error;
     wasm_trap_t *trap;
     uint64_t fuel_slice;
+    uint64_t fuel_before;
+    uint64_t fuel_after;
 
     rt = ctx->runtime;
     if (rt == NULL || rt->engine == NULL || rt->linker == NULL) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
                       ctx->request->connection->log,
                       0,
@@ -634,6 +700,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
 
     module = ctx->conf->module;
     if (module == NULL || module->module == NULL) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
                       ctx->request->connection->log,
                       0,
@@ -642,8 +709,27 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         return NGX_ERROR;
     }
 
-    store = wasmtime_store_new(rt->engine, ctx, NULL);
-    if (store == NULL) {
+    resume = ctx->resume_state;
+    if (resume == NULL) {
+        resume = ngx_pcalloc(ctx->request->pool, sizeof(*resume));
+        if (resume == NULL) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+            return NGX_ERROR;
+        }
+
+        ctx->resume_state = resume;
+    }
+
+    ctx->state = NGX_HTTP_WASM_EXEC_RUNNING;
+    ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_NONE;
+    ctx->yielded = 0;
+
+    if (resume->store == NULL) {
+        resume->store = wasmtime_store_new(rt->engine, ctx, NULL);
+    }
+
+    if (resume->store == NULL) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
                       ctx->request->connection->log,
                       0,
@@ -651,70 +737,95 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         return NGX_ERROR;
     }
 
-    context = wasmtime_store_context(store);
+    context = wasmtime_store_context(resume->store);
     fuel_slice = ctx->fuel_remaining;
     if (ctx->timeslice_fuel > 0 && ctx->timeslice_fuel < fuel_slice) {
         fuel_slice = ctx->timeslice_fuel;
     }
+    fuel_before = fuel_slice;
 
     error = wasmtime_context_set_fuel(context, fuel_slice);
     if (error != NULL) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_http_wasm_runtime_log_error(
             ctx->request->connection->log, "failed to set fuel", error);
-        wasmtime_store_delete(store);
         return NGX_ERROR;
     }
 
-    if (ngx_http_wasm_runtime_update_fuel(
-            ctx, context, "failed to read remaining fuel after setup") !=
-        NGX_OK) {
-        wasmtime_store_delete(store);
-        return NGX_ERROR;
+    if (!resume->instance_ready) {
+        trap = NULL;
+        error = wasmtime_linker_instantiate(
+            rt->linker, context, module->module, &resume->instance, &trap);
+        if (error != NULL) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+            ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
+                                            "failed to instantiate module",
+                                            error);
+            return NGX_ERROR;
+        }
+
+        if (trap != NULL) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+            ngx_http_wasm_runtime_log_trap(
+                ctx->request->connection->log, "module start trap", trap);
+            return NGX_ERROR;
+        }
+
+        resume->instance_ready = 1;
     }
 
-    trap = NULL;
-    error = wasmtime_linker_instantiate(
-        rt->linker, context, module->module, &instance, &trap);
-    if (error != NULL) {
-        ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
-                                        "failed to instantiate module",
-                                        error);
-        wasmtime_store_delete(store);
-        return NGX_ERROR;
-    }
+    if (!resume->func_ready) {
+        if (!wasmtime_instance_export_get(
+                context,
+                &resume->instance,
+                (const char *)ctx->conf->export_name.data,
+                ctx->conf->export_name.len,
+                &item) ||
+            item.kind != WASMTIME_EXTERN_FUNC) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+            ngx_log_error(NGX_LOG_ERR,
+                          ctx->request->connection->log,
+                          0,
+                          "ngx_wasm: export \"%V\" not found or not a function",
+                          &ctx->conf->export_name);
+            return NGX_ERROR;
+        }
 
-    if (trap != NULL) {
-        ngx_http_wasm_runtime_log_trap(
-            ctx->request->connection->log, "module start trap", trap);
-        wasmtime_store_delete(store);
-        return NGX_ERROR;
-    }
-
-    if (!wasmtime_instance_export_get(context,
-                                      &instance,
-                                      (const char *)ctx->conf->export_name.data,
-                                      ctx->conf->export_name.len,
-                                      &item) ||
-        item.kind != WASMTIME_EXTERN_FUNC) {
-        ngx_log_error(NGX_LOG_ERR,
-                      ctx->request->connection->log,
-                      0,
-                      "ngx_wasm: export \"%V\" not found or not a function",
-                      &ctx->conf->export_name);
-        wasmtime_store_delete(store);
-        return NGX_ERROR;
+        resume->func = item.of.func;
+        wasmtime_extern_delete(&item);
+        resume->func_ready = 1;
     }
 
     trap = NULL;
     error =
-        wasmtime_func_call(context, &item.of.func, NULL, 0, &result, 1, &trap);
-    wasmtime_extern_delete(&item);
+        wasmtime_func_call(context, &resume->func, NULL, 0, &result, 1, &trap);
 
     if (error != NULL) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_http_wasm_runtime_log_error(
             ctx->request->connection->log, "guest call failed", error);
-        wasmtime_store_delete(store);
         return NGX_ERROR;
+    }
+
+    error = wasmtime_context_get_fuel(context, &fuel_after);
+    if (error != NULL) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+        ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
+                                        "failed to read remaining fuel",
+                                        error);
+        return NGX_ERROR;
+    }
+
+    if (fuel_before >= fuel_after) {
+        ctx->fuel_remaining -= (fuel_before - fuel_after);
+    } else {
+        ctx->fuel_remaining = 0;
+    }
+
+    if (ctx->yielded) {
+        ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
+        ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
+        return NGX_AGAIN;
     }
 
     if (trap != NULL) {
@@ -728,10 +839,12 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                     context,
                     "failed to read remaining fuel after interruption") !=
                 NGX_OK) {
-                wasmtime_store_delete(store);
+                ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
                 return NGX_ERROR;
             }
 
+            ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
+            ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
             ngx_log_error(NGX_LOG_ERR,
                           ctx->request->connection->log,
                           0,
@@ -741,35 +854,27 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                           (unsigned long long)ctx->timeslice_fuel,
                           (unsigned long long)ctx->fuel_remaining);
             wasm_trap_delete(trap);
-            wasmtime_store_delete(store);
             return NGX_ERROR;
         }
 
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_http_wasm_runtime_log_trap(
             ctx->request->connection->log, "guest trapped", trap);
-        wasmtime_store_delete(store);
-        return NGX_ERROR;
-    }
-
-    if (ngx_http_wasm_runtime_update_fuel(
-            ctx, context, "failed to read remaining fuel after guest call") !=
-        NGX_OK) {
-        wasmtime_store_delete(store);
         return NGX_ERROR;
     }
 
     if (result.kind != WASMTIME_I32 || result.of.i32 != 0) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
                       ctx->request->connection->log,
                       0,
                       "ngx_wasm: guest export \"%V\" returned %d",
                       &ctx->conf->export_name,
                       (int)result.of.i32);
-        wasmtime_store_delete(store);
         return NGX_ERROR;
     }
 
-    wasmtime_store_delete(store);
+    ctx->state = NGX_HTTP_WASM_EXEC_DONE;
 
     return NGX_OK;
 }

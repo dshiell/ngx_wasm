@@ -10,6 +10,7 @@ use File::Spec;
 our @EXPORT_OK = qw(
     wasm_root
     hello_world_wasm
+    manual_yield_wasm
     missing_export_wasm
     missing_memory_wasm
     guest_trap_wasm
@@ -33,6 +34,10 @@ sub wasm_root {
 
 sub hello_world_wasm {
     return wasm_root() . "/wasm/hello-world/build/hello_world.wasm";
+}
+
+sub manual_yield_wasm {
+    return wasm_root() . "/wasm/hello-world/src/manual_yield.wat";
 }
 
 sub missing_export_wasm {

@@ -4,7 +4,16 @@
 
 #include <ngx_http_wasm_runtime.h>
 
+typedef struct {
+    ngx_http_wasm_exec_ctx_t exec;
+    ngx_uint_t waiting;
+} ngx_http_wasm_ctx_t;
+
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
+static void ngx_http_wasm_resume_handler(ngx_http_request_t *r);
+static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
+                                           ngx_http_wasm_ctx_t *ctx);
+static void ngx_http_wasm_cleanup_ctx(void *data);
 static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
@@ -308,9 +317,10 @@ ngx_http_wasm_timeslice_fuel(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 }
 
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
+    ngx_pool_cleanup_t *cln;
+    ngx_http_wasm_ctx_t *ctx;
     ngx_http_wasm_conf_t *wcf;
     ngx_http_wasm_main_conf_t *wmcf;
-    ngx_http_wasm_exec_ctx_t exec;
     ngx_int_t rc;
 
     wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
@@ -336,17 +346,82 @@ static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
         return rc;
     }
 
-    ngx_http_wasm_runtime_init_exec_ctx(&exec, r, wcf, wmcf->runtime);
+    ctx = ngx_http_get_module_ctx(r, ngx_http_wasm_module);
+    if (ctx == NULL) {
+        ctx = ngx_pcalloc(r->pool, sizeof(*ctx));
+        if (ctx == NULL) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
 
-    rc = ngx_http_wasm_runtime_run(&exec);
+        ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec, r, wcf, wmcf->runtime);
+        ngx_http_set_ctx(r, ctx, ngx_http_wasm_module);
+
+        cln = ngx_pool_cleanup_add(r->pool, 0);
+        if (cln == NULL) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        cln->handler = ngx_http_wasm_cleanup_ctx;
+        cln->data = &ctx->exec;
+    }
+
+    return ngx_http_wasm_run_request(r, ctx);
+}
+
+static void ngx_http_wasm_resume_handler(ngx_http_request_t *r) {
+    ngx_http_wasm_ctx_t *ctx;
+    ngx_int_t rc;
+
+    ctx = ngx_http_get_module_ctx(r, ngx_http_wasm_module);
+    if (ctx == NULL) {
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+
+    rc = ngx_http_wasm_run_request(r, ctx);
+    if (rc == NGX_DONE) {
+        return;
+    }
+
+    ngx_http_finalize_request(r, rc);
+}
+
+static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
+                                           ngx_http_wasm_ctx_t *ctx) {
+    ngx_int_t rc;
+
+    rc = ngx_http_wasm_runtime_run(&ctx->exec);
+    if (rc == NGX_AGAIN) {
+        r->write_event_handler = ngx_http_wasm_resume_handler;
+
+        if (ngx_http_post_request(r, NULL) != NGX_OK) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        if (!ctx->waiting) {
+            ctx->waiting = 1;
+            r->main->count++;
+        }
+
+        return NGX_DONE;
+    }
+
     if (rc != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    rc = ngx_http_wasm_abi_send_response(&exec.abi);
+    ctx->waiting = 0;
+
+    rc = ngx_http_wasm_abi_send_response(&ctx->exec.abi);
     if (rc == NGX_ERROR) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     return rc;
+}
+
+static void ngx_http_wasm_cleanup_ctx(void *data) {
+    ngx_http_wasm_exec_ctx_t *exec = data;
+
+    ngx_http_wasm_runtime_cleanup_exec_ctx(exec);
 }

@@ -12,6 +12,21 @@
 
 typedef struct ngx_http_wasm_cached_module_s ngx_http_wasm_cached_module_t;
 typedef struct ngx_http_wasm_runtime_state_s ngx_http_wasm_runtime_state_t;
+typedef struct ngx_http_wasm_resume_state_s ngx_http_wasm_resume_state_t;
+
+typedef enum {
+    NGX_HTTP_WASM_EXEC_READY = 0,
+    NGX_HTTP_WASM_EXEC_RUNNING,
+    NGX_HTTP_WASM_EXEC_SUSPENDED,
+    NGX_HTTP_WASM_EXEC_DONE,
+    NGX_HTTP_WASM_EXEC_ERROR,
+} ngx_http_wasm_exec_state_e;
+
+typedef enum {
+    NGX_HTTP_WASM_SUSPEND_NONE = 0,
+    NGX_HTTP_WASM_SUSPEND_RESCHEDULE,
+    NGX_HTTP_WASM_SUSPEND_WAIT_IO,
+} ngx_http_wasm_suspend_kind_e;
 
 typedef struct {
     ngx_array_t *modules;
@@ -35,6 +50,10 @@ typedef struct {
     uint64_t fuel_limit;
     uint64_t timeslice_fuel;
     uint64_t fuel_remaining;
+    ngx_http_wasm_exec_state_e state;
+    ngx_http_wasm_suspend_kind_e suspend_kind;
+    ngx_http_wasm_resume_state_t *resume_state;
+    ngx_uint_t yielded;
 } ngx_http_wasm_exec_ctx_t;
 
 ngx_int_t ngx_http_wasm_runtime_init(ngx_conf_t *cf,
@@ -47,6 +66,7 @@ void ngx_http_wasm_runtime_init_exec_ctx(
     ngx_http_request_t *r,
     ngx_http_wasm_conf_t *conf,
     ngx_http_wasm_runtime_state_t *runtime);
+void ngx_http_wasm_runtime_cleanup_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx);
 ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx);
 
 #endif /* _NGX_HTTP_WASM_RUNTIME_H_INCLUDED_ */

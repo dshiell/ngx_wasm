@@ -66,6 +66,7 @@ Current staged plan:
    - access
    - subrequests
    - async fuel/yield behavior
+   - reload while requests are suspended
 
 Testing principles:
 
@@ -75,3 +76,51 @@ Testing principles:
 - async tests should only be added once the async runtime behavior exists
 - sanitizer coverage should run at least on Linux CI, where `ASan+UBSan`
   support is most reliable
+
+## Suspend/Resume Plan
+
+Suspend/resume needs coverage before the full feature is considered stable.
+This should be treated as a first-class test matrix, not a few spot checks.
+
+The minimum staged coverage is:
+
+1. Deterministic reschedule tests
+   - manual yield reschedules once and then completes
+   - manual yield reschedules multiple times and then completes
+   - timeslice exhaustion reschedules and then completes
+   - total fuel exhaustion fails instead of rescheduling forever
+
+2. Request-state tests
+   - response body is preserved correctly across one or more resumptions
+   - fuel remaining is updated correctly across resumptions
+   - interruption logs distinguish total-fuel exhaustion from timeslice
+     exhaustion
+
+3. Event-loop integration tests
+   - resumed requests are reposted fairly and do not spin in a local loop
+   - multiple suspended requests can make progress without starving one another
+
+4. Reload and lifecycle tests
+   - config reload still works while resumable execution support exists
+   - old workers and new workers do not mix config-cycle-owned Wasmtime state
+   - suspended requests are cleaned up correctly on worker shutdown
+
+5. Future subrequest and downstream I/O tests
+   - buffered subrequest result resumes the parent request on completion
+   - streaming subrequest result resumes the parent request as chunks arrive
+   - downstream backpressure suspends and resumes body generation correctly
+   - client disconnect while suspended cleans up correctly
+   - timeout while suspended cleans up correctly
+
+Recommended harness split:
+
+- `Test::Nginx::Socket` for deterministic request-level behavior
+- dedicated process/integration scripts for reload, timeout, and future
+  streaming cases
+
+Recommended first fixtures for resumable execution:
+
+- one guest that explicitly yields once and then completes
+- one guest that yields multiple times before completion
+- one guest that runs until timeslice interruption
+- later one guest that waits on a host-driven async result

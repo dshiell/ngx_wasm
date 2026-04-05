@@ -47,10 +47,45 @@ Current runtime direction:
 
 - Wasmtime C API embedding
 - one exported guest function per invocation
-- per-worker runtime initialization
-- per-process in-memory module cache
+- cycle-owned Wasmtime engine/linker/module state
+- config-time module read/compile with fail-early startup errors
+- one shared compiled module per unique module path in a config cycle
 - per-invocation fuel limit
-- no async/yield path yet
+- per-invocation timeslice fuel
+- interruption detection exists now
+- resumable execution is the next major runtime step
+
+Planned suspend/resume model:
+
+- guest execution is always tied to an `ngx_http_request_t`
+- guest execution never blocks the worker waiting on external work
+- all waits become "save state, return to nginx, resume later"
+- resumption should use nginx's normal request/event callback model
+
+There are two suspend classes:
+
+- `RESCHEDULE`
+  Manual yield and timeslice exhaustion. The request should be posted to run
+  again fairly after the worker returns to the event loop.
+- `WAIT_IO`
+  External I/O dependency such as a subrequest or downstream write
+  backpressure. The request should resume only when the external event is
+  ready.
+
+Subrequest direction:
+
+- wasm should eventually be able to issue nginx subrequests through a host API
+- the parent request should suspend with `WAIT_IO`
+- the subrequest callback should store result data in the parent wasm ctx
+- the parent request should then be posted for resumption
+- buffered and streaming delivery modes should both be supported later
+
+Downstream write direction:
+
+- once headers are sent they are effectively locked
+- body generation and downstream flushing should proceed through repeated
+  suspend/resume cycles whenever nginx reports write backpressure
+- this should use the same `WAIT_IO` machinery as future subrequest waits
 
 Current copy policy:
 
