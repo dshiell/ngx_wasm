@@ -34,7 +34,8 @@ RUSTUP ?= $(shell \
 WASM_TARGET ?= wasm32-unknown-unknown
 BUILD_SANITIZE ?= 0
 SANITIZER_CC ?= clang
-SANITIZER_FLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize=nonnull-attribute
+SANITIZER_IGNORELIST ?= $(CURDIR)/sanitizers/ubsan.ignorelist
+SANITIZER_FLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize=nonnull-attribute -fsanitize-ignorelist=$(SANITIZER_IGNORELIST)
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
 ASAN_OPTIONS ?= detect_leaks=1:abort_on_error=1
