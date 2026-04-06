@@ -6,7 +6,7 @@ use TestWasm ();
 use Test::Nginx::Socket -Base;
 
 repeat_each(1);
-plan tests => repeat_each() * 12;
+plan tests => repeat_each() * 14;
 
 our $HttpConfig = '';
 
@@ -96,3 +96,17 @@ GET /wasm
 --- error_code: 200
 --- response_body
 hello after manual yield
+
+
+=== TEST 6: multiple yields resume and complete
+--- config eval
+qq{
+    location /wasm {
+        content_by_wasm @{[ TestWasm::multi_yield_wasm() ]} on_content;
+    }
+}
+--- request
+GET /wasm
+--- error_code: 200
+--- response_body
+hello after two yields

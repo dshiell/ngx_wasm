@@ -11,6 +11,7 @@ our @EXPORT_OK = qw(
     wasm_root
     hello_world_wasm
     manual_yield_wasm
+    multi_yield_wasm
     missing_export_wasm
     missing_memory_wasm
     guest_trap_wasm
@@ -38,6 +39,10 @@ sub hello_world_wasm {
 
 sub manual_yield_wasm {
     return wasm_root() . "/wasm/hello-world/src/manual_yield.wat";
+}
+
+sub multi_yield_wasm {
+    return wasm_root() . "/wasm/hello-world/src/multi_yield.wat";
 }
 
 sub missing_export_wasm {
