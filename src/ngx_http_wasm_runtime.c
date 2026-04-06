@@ -121,6 +121,7 @@ ngx_int_t ngx_http_wasm_runtime_init(ngx_conf_t *cf,
     }
 
     wasmtime_config_consume_fuel_set(config, true);
+    wasmtime_config_parallel_compilation_set(config, false);
 #if (NGX_DARWIN)
     wasmtime_config_macos_use_mach_ports_set(config, false);
 #endif
