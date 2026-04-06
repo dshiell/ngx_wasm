@@ -233,3 +233,7 @@ need different sanitizer settings.
 The default sanitizer flags disable UBSan's `nonnull-attribute` check and use
 an ignorelist for known nginx-core sanitizer findings outside `ngx_wasm`
 itself.
+
+On Linux, leak detection stays enabled, but the default `LSAN_OPTIONS` points
+at [sanitizers/lsan.supp](/Users/derek/projects/nginx-playground/ngx_wasm/sanitizers/lsan.supp)
+to suppress known nginx-core process-lifetime allocations from event startup.
