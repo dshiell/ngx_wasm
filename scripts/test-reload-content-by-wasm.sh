@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NGINX_DIR="${NGINX_DIR:-${ROOT_DIR}/../nginx}"
 NGINX_BIN="${NGINX_BIN:-${NGINX_DIR}/objs/nginx}"
+NGINX_BUILD_INFO="${NGINX_BUILD_INFO:-${NGINX_DIR}/objs/ngx_wasm_build.env}"
 INITIAL_MODULE="${INITIAL_MODULE:-${ROOT_DIR}/wasm/hello-world/build/hello_world.wasm}"
 RELOADED_MODULE="${RELOADED_MODULE:-${ROOT_DIR}/wasm/hello-world/src/hello_world_reload.wat}"
 PORT="${PORT:-$((20000 + RANDOM % 10000))}"
@@ -15,9 +16,60 @@ CONF_PATH="${PREFIX_DIR}/nginx.conf"
 LOG_DIR="${PREFIX_DIR}/logs"
 PID_FILE="${LOG_DIR}/nginx.pid"
 
+if [ -f "${NGINX_BUILD_INFO}" ]; then
+    # shellcheck disable=SC1090
+    . "${NGINX_BUILD_INFO}"
+fi
+
+sanitize_asan_options_for_oneshot() {
+    local options="${ASAN_OPTIONS:-}"
+    local part
+    local filtered=""
+
+    if [ -z "${options}" ]; then
+        printf '%s\n' "detect_leaks=0"
+        return 0
+    fi
+
+    IFS=':' read -r -a parts <<< "${options}"
+    for part in "${parts[@]}"; do
+        if [[ "${part}" == detect_leaks=* ]]; then
+            continue
+        fi
+        if [ -n "${filtered}" ]; then
+            filtered="${filtered}:${part}"
+        else
+            filtered="${part}"
+        fi
+    done
+
+    if [ -n "${filtered}" ]; then
+        filtered="${filtered}:detect_leaks=0"
+    else
+        filtered="detect_leaks=0"
+    fi
+
+    printf '%s\n' "${filtered}"
+}
+
+run_nginx_oneshot() {
+    local oneshot_asan_options=""
+
+    if [ "${BUILD_SANITIZE:-0}" = "1" ]; then
+        oneshot_asan_options="$(sanitize_asan_options_for_oneshot)"
+        ASAN_OPTIONS="${oneshot_asan_options}" \
+        LSAN_OPTIONS="${LSAN_OPTIONS:-}" \
+        UBSAN_OPTIONS="${UBSAN_OPTIONS:-}" \
+        "${NGINX_BIN}" "$@"
+        return $?
+    fi
+
+    "${NGINX_BIN}" "$@"
+}
+
 cleanup() {
     if [ -f "${PID_FILE}" ]; then
-        "${NGINX_BIN}" -p "${PREFIX_DIR}" -c "${CONF_PATH}" -s quit >/dev/null 2>&1 || true
+        run_nginx_oneshot -p "${PREFIX_DIR}" -c "${CONF_PATH}" -s quit >/dev/null 2>&1 || true
         sleep 1
     fi
 
@@ -115,7 +167,7 @@ http {
 }
 EOF
 
-"${NGINX_BIN}" -t -p "${PREFIX_DIR}" -c "${CONF_PATH}" >/dev/null || {
+run_nginx_oneshot -t -p "${PREFIX_DIR}" -c "${CONF_PATH}" >/dev/null || {
     print_error_log
     exit 1
 }
@@ -135,7 +187,7 @@ wait_for_body "hello from guest wasm" || {
 
 cp "${RELOADED_MODULE}" "${MODULE_PATH}"
 
-"${NGINX_BIN}" -p "${PREFIX_DIR}" -c "${CONF_PATH}" -s reload >/dev/null || {
+run_nginx_oneshot -p "${PREFIX_DIR}" -c "${CONF_PATH}" -s reload >/dev/null || {
     print_error_log
     exit 1
 }
