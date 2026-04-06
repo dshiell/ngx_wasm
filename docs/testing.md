@@ -82,6 +82,11 @@ Testing principles:
 Suspend/resume needs coverage before the full feature is considered stable.
 This should be treated as a first-class test matrix, not a few spot checks.
 
+Fuel-based continuation will use Wasmtime async futures, so tests should be
+written around poll/reschedule behavior rather than synchronous trap behavior.
+The important contract is "future incomplete means suspend and repost", not
+"trap means maybe resume".
+
 The minimum staged coverage is:
 
 1. Deterministic reschedule tests
@@ -89,6 +94,7 @@ The minimum staged coverage is:
    - manual yield reschedules multiple times and then completes
    - timeslice exhaustion reschedules and then completes
    - total fuel exhaustion fails instead of rescheduling forever
+   - async instantiation can yield and still complete correctly
 
 2. Request-state tests
    - response body is preserved correctly across one or more resumptions
@@ -124,3 +130,10 @@ Recommended first fixtures for resumable execution:
 - one guest that yields multiple times before completion
 - one guest that runs until timeslice interruption
 - later one guest that waits on a host-driven async result
+
+Recommended implementation-order tests for async conversion:
+
+- first prove async instantiation and async call complete without yielding
+- then enable fuel async yield interval and prove a single timeslice yield
+- then add repeated timeslice yields
+- only after that convert manual yield to the same async polling path

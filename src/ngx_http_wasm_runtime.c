@@ -6,6 +6,7 @@
 #include <wasmtime/extern.h>
 #include <wasmtime/func.h>
 #include <wasmtime/instance.h>
+#include <wasmtime/async.h>
 #include <wasmtime/linker.h>
 #include <wasmtime/memory.h>
 #include <wasmtime/module.h>
@@ -22,9 +23,18 @@ struct ngx_http_wasm_cached_module_s {
 };
 
 struct ngx_http_wasm_resume_state_s {
+    enum {
+        NGX_HTTP_WASM_FUTURE_NONE = 0,
+        NGX_HTTP_WASM_FUTURE_INSTANTIATE,
+        NGX_HTTP_WASM_FUTURE_CALL,
+    } future_kind;
     wasmtime_store_t *store;
     wasmtime_instance_t instance;
     wasmtime_func_t func;
+    wasmtime_call_future_t *future;
+    wasmtime_val_t results[1];
+    wasm_trap_t *trap;
+    wasmtime_error_t *error;
     unsigned instance_ready : 1;
     unsigned func_ready : 1;
 };
@@ -214,11 +224,27 @@ void ngx_http_wasm_runtime_cleanup_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx) {
         return;
     }
 
+    if (ctx->resume_state->future != NULL) {
+        wasmtime_call_future_delete(ctx->resume_state->future);
+        ctx->resume_state->future = NULL;
+    }
+
+    if (ctx->resume_state->trap != NULL) {
+        wasm_trap_delete(ctx->resume_state->trap);
+        ctx->resume_state->trap = NULL;
+    }
+
+    if (ctx->resume_state->error != NULL) {
+        wasmtime_error_delete(ctx->resume_state->error);
+        ctx->resume_state->error = NULL;
+    }
+
     if (ctx->resume_state->store != NULL) {
         wasmtime_store_delete(ctx->resume_state->store);
         ctx->resume_state->store = NULL;
     }
 
+    ctx->resume_state->future_kind = NGX_HTTP_WASM_FUTURE_NONE;
     ctx->resume_state->instance_ready = 0;
     ctx->resume_state->func_ready = 0;
 }
