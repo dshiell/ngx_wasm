@@ -14,6 +14,7 @@ static void ngx_http_wasm_resume_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
                                            ngx_http_wasm_ctx_t *ctx);
 static void ngx_http_wasm_cleanup_ctx(void *data);
+static void ngx_http_wasm_cleanup_main_conf(void *data);
 static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
@@ -132,6 +133,7 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
 }
 
 static void *ngx_http_wasm_create_main_conf(ngx_conf_t *cf) {
+    ngx_pool_cleanup_t *cln;
     ngx_http_wasm_main_conf_t *wmcf;
 
     wmcf = ngx_pcalloc(cf->pool, sizeof(ngx_http_wasm_main_conf_t));
@@ -148,6 +150,15 @@ static void *ngx_http_wasm_create_main_conf(ngx_conf_t *cf) {
     if (ngx_http_wasm_runtime_init(cf, wmcf) != NGX_OK) {
         return NULL;
     }
+
+    cln = ngx_pool_cleanup_add(cf->pool, 0);
+    if (cln == NULL) {
+        ngx_http_wasm_runtime_destroy(wmcf);
+        return NULL;
+    }
+
+    cln->handler = ngx_http_wasm_cleanup_main_conf;
+    cln->data = wmcf;
 
     return wmcf;
 }
@@ -424,4 +435,10 @@ static void ngx_http_wasm_cleanup_ctx(void *data) {
     ngx_http_wasm_exec_ctx_t *exec = data;
 
     ngx_http_wasm_runtime_cleanup_exec_ctx(exec);
+}
+
+static void ngx_http_wasm_cleanup_main_conf(void *data) {
+    ngx_http_wasm_main_conf_t *wmcf = data;
+
+    ngx_http_wasm_runtime_destroy(wmcf);
 }
