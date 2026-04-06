@@ -128,7 +128,9 @@ ngx_int_t ngx_http_wasm_abi_send_response(ngx_http_wasm_abi_ctx_t *ctx) {
         b->sync = 1;
     }
 
-    b->last_buf = 1;
+    b->last_buf = (ctx->request == ctx->request->main) ? 1 : 0;
+    b->last_in_chain = 1;
+    b->sync = (b->last_buf || b->memory) ? 0 : 1;
 
     out.buf = b;
     out.next = NULL;

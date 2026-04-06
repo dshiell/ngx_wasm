@@ -8,7 +8,7 @@ PROVE_BIN="${PROVE:-prove}"
 TEST_NGINX_PERL_LIB="${TEST_NGINX_PERL_LIB:-${ROOT_DIR}/third_party/test-nginx/lib}"
 PERL_DEPS_LIB="${PERL_DEPS_LIB:-${ROOT_DIR}/third_party/perl5/lib/perl5}"
 TEST_NGINX_BINARY="${TEST_NGINX_BINARY:-${NGINX_DIR}/objs/nginx}"
-TEST_NGINX_RANDOMIZE="${TEST_NGINX_RANDOMIZE:-1}"
+TEST_NGINX_RANDOMIZE="${TEST_NGINX_RANDOMIZE:-0}"
 TEST_NGINX_NO_CLEAN="${TEST_NGINX_NO_CLEAN:-0}"
 TEST_NGINX_PORT="${TEST_NGINX_PORT:-}"
 TEST_NGINX_SERVER_PORT="${TEST_NGINX_SERVER_PORT:-}"
@@ -52,6 +52,9 @@ if [ "${BUILD_SANITIZE:-0}" = "1" ]; then
     fi
 
     export ASAN_OPTIONS
+    if [ -n "${LSAN_OPTIONS:-}" ]; then
+        export LSAN_OPTIONS
+    fi
     export UBSAN_OPTIONS
 fi
 
@@ -65,6 +68,26 @@ export TEST_NGINX_SERVER_PORT
 export TEST_NGINX_CLIENT_PORT
 export TEST_NGINX_SERVROOT
 
+find_latest_servroot() {
+    local latest_dir=""
+    local latest_mtime=""
+    local dir=""
+    local mtime=""
+
+    while IFS= read -r -d '' dir; do
+        mtime="$(stat -c '%Y' "${dir}" 2>/dev/null || stat -f '%m' "${dir}" 2>/dev/null || true)"
+        if [ -z "${mtime}" ]; then
+            continue
+        fi
+        if [ -z "${latest_mtime}" ] || [ "${mtime}" -gt "${latest_mtime}" ]; then
+            latest_mtime="${mtime}"
+            latest_dir="${dir}"
+        fi
+    done < <(find "${ROOT_DIR}/t" -maxdepth 1 -type d -name 'servroot*' -print0)
+
+    printf '%s\n' "${latest_dir}"
+}
+
 test_status=0
 while IFS= read -r test_file; do
     "${PROVE_BIN}" -r "${test_file}" || test_status=$?
@@ -77,7 +100,7 @@ if [ "${test_status}" != "0" ]; then
     if [ -n "${TEST_NGINX_SERVROOT}" ]; then
         servroot="${TEST_NGINX_SERVROOT}"
     else
-        servroot="$(find "${ROOT_DIR}/t" -maxdepth 1 -type d -name 'servroot*' -print | sort | tail -n 1)"
+        servroot="$(find_latest_servroot)"
     fi
 
     if [ -n "${servroot:-}" ] && [ -f "${servroot}/logs/error.log" ]; then
@@ -95,7 +118,7 @@ fi
 if [ -n "${TEST_NGINX_SERVROOT}" ]; then
     servroot="${TEST_NGINX_SERVROOT}"
 else
-    servroot="$(find "${ROOT_DIR}/t" -maxdepth 1 -type d -name 'servroot*' -print | sort | tail -n 1)"
+    servroot="$(find_latest_servroot)"
 fi
 
 if [ -z "${servroot}" ] || [ ! -d "${servroot}" ]; then

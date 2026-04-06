@@ -34,12 +34,18 @@ RUSTUP ?= $(shell \
 WASM_TARGET ?= wasm32-unknown-unknown
 BUILD_SANITIZE ?= 0
 SANITIZER_CC ?= clang
-SANITIZER_FLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize=nonnull-attribute
+SANITIZER_IGNORELIST ?= $(CURDIR)/sanitizers/ubsan.ignorelist
+SANITIZER_COMMON_FLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
+SANITIZER_CC_FLAGS ?= $(SANITIZER_COMMON_FLAGS) -fno-sanitize=nonnull-attribute -fsanitize-ignorelist=$(SANITIZER_IGNORELIST)
+SANITIZER_LD_FLAGS ?= -fsanitize=address,undefined
 UNAME_S := $(shell uname -s)
+LSAN_SUPPRESSIONS ?= $(CURDIR)/sanitizers/lsan.supp
 ifeq ($(UNAME_S),Linux)
 ASAN_OPTIONS ?= detect_leaks=1:abort_on_error=1
+LSAN_OPTIONS ?= suppressions=$(LSAN_SUPPRESSIONS):print_suppressions=0
 else
 ASAN_OPTIONS ?= detect_leaks=0:abort_on_error=1
+LSAN_OPTIONS ?=
 endif
 UBSAN_OPTIONS ?= print_stacktrace=1:halt_on_error=1
 
@@ -50,8 +56,8 @@ FAILURES_DIR = wasm/failures
 ifeq ($(BUILD_SANITIZE),1)
 NGINX_CONFIGURE_ARGS = \
 	--with-cc="$(SANITIZER_CC)" \
-	--with-cc-opt='$(SANITIZER_FLAGS)' \
-	--with-ld-opt='$(SANITIZER_FLAGS)' \
+	--with-cc-opt='$(SANITIZER_CC_FLAGS)' \
+	--with-ld-opt='$(SANITIZER_LD_FLAGS)' \
 	--add-module="$(CURDIR)"
 else
 NGINX_CONFIGURE_ARGS = --add-module="$(CURDIR)"
@@ -86,6 +92,7 @@ nginx-build:
 	@{ \
 		printf 'BUILD_SANITIZE=%s\n' "$(BUILD_SANITIZE)"; \
 		printf 'ASAN_OPTIONS=%s\n' "$(ASAN_OPTIONS)"; \
+		printf 'LSAN_OPTIONS=%s\n' "$(LSAN_OPTIONS)"; \
 		printf 'UBSAN_OPTIONS=%s\n' "$(UBSAN_OPTIONS)"; \
 	} > "$(NGINX_BUILD_INFO)"
 

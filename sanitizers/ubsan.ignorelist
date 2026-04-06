@@ -1,0 +1,8 @@
+# Suppress known nginx-core UBSan findings that are outside ngx_wasm itself.
+[undefined]
+src:*/nginx/src/core/ngx_output_chain.c
+mainfile:*/nginx/src/core/ngx_output_chain.c
+fun:ngx_output_chain
+src:*/nginx/src/http/ngx_http_parse.c
+mainfile:*/nginx/src/http/ngx_http_parse.c
+fun:ngx_http_parse_request_line

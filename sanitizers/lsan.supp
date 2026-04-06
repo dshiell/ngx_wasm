@@ -1,0 +1,4 @@
+# Suppress known nginx-core process-lifetime allocations from event init.
+leak:ngx_event_process_init
+leak:ngx_single_process_cycle
+leak:ngx_alloc
