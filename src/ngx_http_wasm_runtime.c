@@ -28,9 +28,18 @@ struct ngx_http_wasm_resume_state_s {
         NGX_HTTP_WASM_FUTURE_INSTANTIATE,
         NGX_HTTP_WASM_FUTURE_CALL,
     } future_kind;
+    /*
+     * The request owns exactly one store for this resume state. The instance
+     * and function handles below are borrowed from that store and become
+     * invalid immediately when the store is deleted.
+     */
     wasmtime_store_t *store;
     wasmtime_instance_t instance;
     wasmtime_func_t func;
+    /*
+     * At most one future may be live for a store at a time. While it exists,
+     * Wasmtime writes trap/error/results into the stable storage below.
+     */
     wasmtime_call_future_t *future;
     wasmtime_val_t results[1];
     wasm_trap_t *trap;
@@ -81,7 +90,15 @@ ngx_http_wasm_runtime_suspend(ngx_http_wasm_exec_ctx_t *ctx,
                               ngx_http_wasm_suspend_kind_e kind,
                               const char *reason);
 static void
-ngx_http_wasm_runtime_clear_async_outcome(ngx_http_wasm_resume_state_t *resume);
+ngx_http_wasm_runtime_clear_async_future(ngx_http_wasm_resume_state_t *resume);
+static void
+ngx_http_wasm_runtime_clear_async_outputs(ngx_http_wasm_resume_state_t *resume);
+static void
+ngx_http_wasm_runtime_reset_resume_state(ngx_http_wasm_resume_state_t *resume);
+static ngx_int_t
+ngx_http_wasm_runtime_prepare_async_op(ngx_http_wasm_exec_ctx_t *ctx,
+                                       ngx_http_wasm_resume_state_t *resume,
+                                       ngx_uint_t future_kind);
 static ngx_int_t
 ngx_http_wasm_runtime_prepare_async_yield(ngx_http_wasm_exec_ctx_t *ctx,
                                           wasmtime_context_t *context);
@@ -237,29 +254,8 @@ void ngx_http_wasm_runtime_cleanup_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx) {
         return;
     }
 
-    if (ctx->resume_state->future != NULL) {
-        wasmtime_call_future_delete(ctx->resume_state->future);
-        ctx->resume_state->future = NULL;
-    }
-
-    if (ctx->resume_state->trap != NULL) {
-        wasm_trap_delete(ctx->resume_state->trap);
-        ctx->resume_state->trap = NULL;
-    }
-
-    if (ctx->resume_state->error != NULL) {
-        wasmtime_error_delete(ctx->resume_state->error);
-        ctx->resume_state->error = NULL;
-    }
-
-    if (ctx->resume_state->store != NULL) {
-        wasmtime_store_delete(ctx->resume_state->store);
-        ctx->resume_state->store = NULL;
-    }
-
-    ctx->resume_state->future_kind = NGX_HTTP_WASM_FUTURE_NONE;
-    ctx->resume_state->instance_ready = 0;
-    ctx->resume_state->func_ready = 0;
+    ngx_http_wasm_runtime_reset_resume_state(ctx->resume_state);
+    ctx->resume_state = NULL;
 }
 
 static ngx_int_t
@@ -600,13 +596,75 @@ ngx_http_wasm_runtime_suspend(ngx_http_wasm_exec_ctx_t *ctx,
     return NGX_AGAIN;
 }
 
-static void ngx_http_wasm_runtime_clear_async_outcome(
+static void ngx_http_wasm_runtime_clear_async_future(
     ngx_http_wasm_resume_state_t *resume) {
     if (resume->future != NULL) {
         wasmtime_call_future_delete(resume->future);
         resume->future = NULL;
     }
     resume->future_kind = NGX_HTTP_WASM_FUTURE_NONE;
+}
+
+static void
+ngx_http_wasm_runtime_clear_async_outputs(ngx_http_wasm_resume_state_t *resume) {
+    if (resume->trap != NULL) {
+        wasm_trap_delete(resume->trap);
+        resume->trap = NULL;
+    }
+
+    if (resume->error != NULL) {
+        wasmtime_error_delete(resume->error);
+        resume->error = NULL;
+    }
+
+    resume->results[0].kind = WASMTIME_I32;
+    resume->results[0].of.i32 = 0;
+}
+
+static void
+ngx_http_wasm_runtime_reset_resume_state(ngx_http_wasm_resume_state_t *resume) {
+    ngx_http_wasm_runtime_clear_async_future(resume);
+    ngx_http_wasm_runtime_clear_async_outputs(resume);
+
+    if (resume->store != NULL) {
+        wasmtime_store_delete(resume->store);
+        resume->store = NULL;
+    }
+
+    ngx_memzero(&resume->instance, sizeof(resume->instance));
+    ngx_memzero(&resume->func, sizeof(resume->func));
+    resume->instance_ready = 0;
+    resume->func_ready = 0;
+}
+
+static ngx_int_t
+ngx_http_wasm_runtime_prepare_async_op(ngx_http_wasm_exec_ctx_t *ctx,
+                                       ngx_http_wasm_resume_state_t *resume,
+                                       ngx_uint_t future_kind) {
+    if ((resume->future == NULL) !=
+        (resume->future_kind == NGX_HTTP_WASM_FUTURE_NONE)) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+        ngx_log_error(NGX_LOG_ERR,
+                      ctx->request->connection->log,
+                      0,
+                      "ngx_wasm: inconsistent async future state");
+        return NGX_ERROR;
+    }
+
+    if (resume->future != NULL) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+        ngx_log_error(NGX_LOG_ERR,
+                      ctx->request->connection->log,
+                      0,
+                      "ngx_wasm: attempted to start async work while another "
+                      "future is still alive");
+        return NGX_ERROR;
+    }
+
+    ngx_http_wasm_runtime_clear_async_outputs(resume);
+    resume->future_kind = future_kind;
+
+    return NGX_OK;
 }
 
 static ngx_int_t
@@ -864,9 +922,11 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                 return NGX_ERROR;
             }
 
-            resume->trap = NULL;
-            resume->error = NULL;
-            resume->future_kind = NGX_HTTP_WASM_FUTURE_INSTANTIATE;
+            if (ngx_http_wasm_runtime_prepare_async_op(
+                    ctx, resume, NGX_HTTP_WASM_FUTURE_INSTANTIATE) != NGX_OK) {
+                return NGX_ERROR;
+            }
+
             resume->future =
                 wasmtime_linker_instantiate_async(rt->linker,
                                                   context,
@@ -895,7 +955,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                                   "ngx_wasm: failed to create instantiation "
                                   "future");
                 }
-                resume->future_kind = NGX_HTTP_WASM_FUTURE_NONE;
+                ngx_http_wasm_runtime_clear_async_future(resume);
                 return NGX_ERROR;
             }
         }
@@ -931,7 +991,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                 "timeslice fuel yield during instantiate");
         }
 
-        ngx_http_wasm_runtime_clear_async_outcome(resume);
+        ngx_http_wasm_runtime_clear_async_future(resume);
 
         if (ngx_http_wasm_runtime_update_fuel(
                 ctx,
@@ -991,11 +1051,11 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             return NGX_ERROR;
         }
 
-        resume->trap = NULL;
-        resume->error = NULL;
-        resume->results[0].kind = WASMTIME_I32;
-        resume->results[0].of.i32 = 0;
-        resume->future_kind = NGX_HTTP_WASM_FUTURE_CALL;
+        if (ngx_http_wasm_runtime_prepare_async_op(
+                ctx, resume, NGX_HTTP_WASM_FUTURE_CALL) != NGX_OK) {
+            return NGX_ERROR;
+        }
+
         resume->future = wasmtime_func_call_async(context,
                                                   &resume->func,
                                                   NULL,
@@ -1023,7 +1083,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                               0,
                               "ngx_wasm: failed to create guest call future");
             }
-            resume->future_kind = NGX_HTTP_WASM_FUTURE_NONE;
+            ngx_http_wasm_runtime_clear_async_future(resume);
             return NGX_ERROR;
         }
     }
@@ -1058,7 +1118,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             ctx, NGX_HTTP_WASM_SUSPEND_RESCHEDULE, "timeslice fuel yield");
     }
 
-    ngx_http_wasm_runtime_clear_async_outcome(resume);
+    ngx_http_wasm_runtime_clear_async_future(resume);
 
     if (ngx_http_wasm_runtime_update_fuel(
             ctx, context, "failed to read remaining fuel after async call") !=

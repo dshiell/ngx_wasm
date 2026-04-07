@@ -76,6 +76,21 @@ Implication for the embedding:
 - once async support is enabled, instantiation and guest export calls must use
   the async C APIs consistently for that store
 
+Current per-request ownership rules:
+
+- `resume_state` is allocated from the request pool on first execution and is
+  the only owner of resumable Wasmtime state for that request
+- the request owns one store for the lifetime of `resume_state`
+- `instance` and exported `func` handles are store-owned borrows that become
+  invalid as soon as the store is deleted
+- at most one async future may exist for the store at a time
+- `trap`, `error`, and `results` storage belong to the current async attempt
+  and must remain stable until that future is deleted and its outcome is
+  consumed
+- request-pool cleanup deletes any live future first, then destroys
+  trap/error outputs, then deletes the store so partial initialization and
+  suspended requests share one teardown path
+
 Planned async execution phases:
 
 - `INSTANTIATE`

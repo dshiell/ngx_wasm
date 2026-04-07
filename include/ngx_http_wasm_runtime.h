@@ -52,6 +52,11 @@ typedef struct {
     uint64_t fuel_remaining;
     ngx_http_wasm_exec_state_e state;
     ngx_http_wasm_suspend_kind_e suspend_kind;
+    /*
+     * Request-pool-owned resumable Wasmtime state. This keeps the store and
+     * every store-owned handle alive across nginx reposts until request pool
+     * cleanup destroys the execution context.
+     */
     ngx_http_wasm_resume_state_t *resume_state;
     ngx_uint_t yielded;
 } ngx_http_wasm_exec_ctx_t;
