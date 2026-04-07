@@ -73,6 +73,10 @@ static ngx_int_t
 ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
                                   wasmtime_context_t *context,
                                   const char *phase);
+static void ngx_http_wasm_runtime_begin_run(ngx_http_wasm_exec_ctx_t *ctx);
+static ngx_int_t
+ngx_http_wasm_runtime_suspend(ngx_http_wasm_exec_ctx_t *ctx,
+                              ngx_http_wasm_suspend_kind_e kind);
 static void
 ngx_http_wasm_runtime_clear_async_outcome(ngx_http_wasm_resume_state_t *resume);
 static ngx_int_t
@@ -563,6 +567,21 @@ ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
     return NGX_OK;
 }
 
+static void ngx_http_wasm_runtime_begin_run(ngx_http_wasm_exec_ctx_t *ctx) {
+    ctx->state = NGX_HTTP_WASM_EXEC_RUNNING;
+    ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_NONE;
+    ctx->yielded = 0;
+}
+
+static ngx_int_t
+ngx_http_wasm_runtime_suspend(ngx_http_wasm_exec_ctx_t *ctx,
+                              ngx_http_wasm_suspend_kind_e kind) {
+    ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
+    ctx->suspend_kind = kind;
+
+    return NGX_AGAIN;
+}
+
 static void ngx_http_wasm_runtime_clear_async_outcome(
     ngx_http_wasm_resume_state_t *resume) {
     if (resume->future != NULL) {
@@ -817,9 +836,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         }
     }
 
-    ctx->state = NGX_HTTP_WASM_EXEC_RUNNING;
-    ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_NONE;
-    ctx->yielded = 0;
+    ngx_http_wasm_runtime_begin_run(ctx);
 
     if (!resume->instance_ready) {
         if (resume->future == NULL) {
@@ -890,9 +907,8 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                 return NGX_ERROR;
             }
 
-            ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
-            ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
-            return NGX_AGAIN;
+            return ngx_http_wasm_runtime_suspend(
+                ctx, NGX_HTTP_WASM_SUSPEND_RESCHEDULE);
         }
 
         ngx_http_wasm_runtime_clear_async_outcome(resume);
@@ -1017,9 +1033,8 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             return NGX_ERROR;
         }
 
-        ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
-        ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
-        return NGX_AGAIN;
+        return ngx_http_wasm_runtime_suspend(ctx,
+                                             NGX_HTTP_WASM_SUSPEND_RESCHEDULE);
     }
 
     ngx_http_wasm_runtime_clear_async_outcome(resume);
@@ -1040,9 +1055,8 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     }
 
     if (ctx->yielded) {
-        ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
-        ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
-        return NGX_AGAIN;
+        return ngx_http_wasm_runtime_suspend(ctx,
+                                             NGX_HTTP_WASM_SUSPEND_RESCHEDULE);
     }
 
     if (resume->trap != NULL) {

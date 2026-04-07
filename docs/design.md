@@ -119,6 +119,17 @@ Downstream write direction:
   suspend/resume cycles whenever nginx reports write backpressure
 - this should use the same `WAIT_IO` machinery as future subrequest waits
 
+Current internal suspend contract:
+
+- there is one resumable suspended execution state:
+  `NGX_HTTP_WASM_EXEC_SUSPENDED`
+- current resumable suspensions always use `RESCHEDULE`
+- terminal total fuel exhaustion is not a suspension; it is an execution error
+
+This keeps the runtime contract centered on "the request is suspended and must
+be resumed later" without adding persistent suspend-source metadata until there
+is a demonstrated need for it.
+
 Current copy policy:
 
 - log imports may borrow guest memory for the duration of the immediate host call
