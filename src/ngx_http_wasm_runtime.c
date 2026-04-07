@@ -74,9 +74,12 @@ ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
                                   wasmtime_context_t *context,
                                   const char *phase);
 static void ngx_http_wasm_runtime_begin_run(ngx_http_wasm_exec_ctx_t *ctx);
+static void ngx_http_wasm_runtime_log_suspend(ngx_http_wasm_exec_ctx_t *ctx,
+                                              const char *reason);
 static ngx_int_t
 ngx_http_wasm_runtime_suspend(ngx_http_wasm_exec_ctx_t *ctx,
-                              ngx_http_wasm_suspend_kind_e kind);
+                              ngx_http_wasm_suspend_kind_e kind,
+                              const char *reason);
 static void
 ngx_http_wasm_runtime_clear_async_outcome(ngx_http_wasm_resume_state_t *resume);
 static ngx_int_t
@@ -573,11 +576,26 @@ static void ngx_http_wasm_runtime_begin_run(ngx_http_wasm_exec_ctx_t *ctx) {
     ctx->yielded = 0;
 }
 
+static void ngx_http_wasm_runtime_log_suspend(ngx_http_wasm_exec_ctx_t *ctx,
+                                              const char *reason) {
+    ngx_log_error(NGX_LOG_NOTICE,
+                  ctx->request->connection->log,
+                  0,
+                  "ngx_wasm: suspending request: reason=%s fuel_limit=%uL "
+                  "timeslice_fuel=%uL fuel_remaining=%uL",
+                  reason,
+                  (unsigned long long)ctx->fuel_limit,
+                  (unsigned long long)ctx->timeslice_fuel,
+                  (unsigned long long)ctx->fuel_remaining);
+}
+
 static ngx_int_t
 ngx_http_wasm_runtime_suspend(ngx_http_wasm_exec_ctx_t *ctx,
-                              ngx_http_wasm_suspend_kind_e kind) {
+                              ngx_http_wasm_suspend_kind_e kind,
+                              const char *reason) {
     ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
     ctx->suspend_kind = kind;
+    ngx_http_wasm_runtime_log_suspend(ctx, reason);
 
     return NGX_AGAIN;
 }
@@ -898,7 +916,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                 ngx_log_error(NGX_LOG_ERR,
                               ctx->request->connection->log,
                               0,
-                              "ngx_wasm: guest interrupted during "
+                              "ngx_wasm: terminal guest interruption during "
                               "instantiation: fuel_limit=%uL "
                               "timeslice_fuel=%uL fuel_remaining=%uL",
                               (unsigned long long)ctx->fuel_limit,
@@ -908,7 +926,9 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             }
 
             return ngx_http_wasm_runtime_suspend(
-                ctx, NGX_HTTP_WASM_SUSPEND_RESCHEDULE);
+                ctx,
+                NGX_HTTP_WASM_SUSPEND_RESCHEDULE,
+                "timeslice fuel yield during instantiate");
         }
 
         ngx_http_wasm_runtime_clear_async_outcome(resume);
@@ -1022,19 +1042,20 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
 
         if (ctx->fuel_remaining == 0) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-            ngx_log_error(NGX_LOG_ERR,
-                          ctx->request->connection->log,
-                          0,
-                          "ngx_wasm: guest interrupted: fuel_limit=%uL "
-                          "timeslice_fuel=%uL fuel_remaining=%uL",
-                          (unsigned long long)ctx->fuel_limit,
-                          (unsigned long long)ctx->timeslice_fuel,
-                          (unsigned long long)ctx->fuel_remaining);
+            ngx_log_error(
+                NGX_LOG_ERR,
+                ctx->request->connection->log,
+                0,
+                "ngx_wasm: terminal guest interruption: fuel_limit=%uL "
+                "timeslice_fuel=%uL fuel_remaining=%uL",
+                (unsigned long long)ctx->fuel_limit,
+                (unsigned long long)ctx->timeslice_fuel,
+                (unsigned long long)ctx->fuel_remaining);
             return NGX_ERROR;
         }
 
-        return ngx_http_wasm_runtime_suspend(ctx,
-                                             NGX_HTTP_WASM_SUSPEND_RESCHEDULE);
+        return ngx_http_wasm_runtime_suspend(
+            ctx, NGX_HTTP_WASM_SUSPEND_RESCHEDULE, "timeslice fuel yield");
     }
 
     ngx_http_wasm_runtime_clear_async_outcome(resume);
@@ -1055,8 +1076,8 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     }
 
     if (ctx->yielded) {
-        return ngx_http_wasm_runtime_suspend(ctx,
-                                             NGX_HTTP_WASM_SUSPEND_RESCHEDULE);
+        return ngx_http_wasm_runtime_suspend(
+            ctx, NGX_HTTP_WASM_SUSPEND_RESCHEDULE, "manual yield");
     }
 
     if (resume->trap != NULL) {
@@ -1066,14 +1087,15 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             (code == WASMTIME_TRAP_CODE_OUT_OF_FUEL ||
              code == WASMTIME_TRAP_CODE_INTERRUPT)) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-            ngx_log_error(NGX_LOG_ERR,
-                          ctx->request->connection->log,
-                          0,
-                          "ngx_wasm: guest interrupted: fuel_limit=%uL "
-                          "timeslice_fuel=%uL fuel_remaining=%uL",
-                          (unsigned long long)ctx->fuel_limit,
-                          (unsigned long long)ctx->timeslice_fuel,
-                          (unsigned long long)ctx->fuel_remaining);
+            ngx_log_error(
+                NGX_LOG_ERR,
+                ctx->request->connection->log,
+                0,
+                "ngx_wasm: terminal guest interruption: fuel_limit=%uL "
+                "timeslice_fuel=%uL fuel_remaining=%uL",
+                (unsigned long long)ctx->fuel_limit,
+                (unsigned long long)ctx->timeslice_fuel,
+                (unsigned long long)ctx->fuel_remaining);
             wasm_trap_delete(resume->trap);
             resume->trap = NULL;
             return NGX_ERROR;

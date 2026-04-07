@@ -94,5 +94,4 @@ qq{
 GET /wasm
 --- error_code: 500
 --- error_log eval
-qr/guest interrupted: fuel_limit=1000/
-
+qr/terminal guest interruption: fuel_limit=1000/

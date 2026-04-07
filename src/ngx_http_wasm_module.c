@@ -389,6 +389,11 @@ static void ngx_http_wasm_resume_handler(ngx_http_request_t *r) {
         return;
     }
 
+    ngx_log_error(NGX_LOG_NOTICE,
+                  r->connection->log,
+                  0,
+                  "ngx_wasm: resuming suspended request");
+
     rc = ngx_http_wasm_run_request(r, ctx);
     if (rc == NGX_DONE) {
         return;
