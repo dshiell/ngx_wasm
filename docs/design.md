@@ -55,6 +55,38 @@ Current runtime direction:
 - interruption detection exists now
 - resumable execution is the next major runtime step
 
+Validated continuation direction:
+
+- true continuation for fuel-based interruption will use Wasmtime async APIs
+- synchronous `wasmtime_func_call` can trap on fuel exhaustion, but it cannot
+  resume from the interrupted point
+- async execution uses a `wasmtime_call_future_t` that can be polled across
+  nginx reschedules
+- timeslice yielding should use
+  `wasmtime_context_fuel_async_yield_interval(...)`
+- async instantiation must also be treated as resumable state because
+  `wasmtime_linker_instantiate_async(...)` returns a future with the same
+  lifetime rules as async function calls
+
+Implication for the embedding:
+
+- the engine config must enable async support
+- per-request execution state must keep the store, current future, trap/error
+  outputs, and stable call/result storage alive until the future is deleted
+- once async support is enabled, instantiation and guest export calls must use
+  the async C APIs consistently for that store
+
+Planned async execution phases:
+
+- `INSTANTIATE`
+  The request owns a future created by `wasmtime_linker_instantiate_async(...)`
+  until the guest instance is ready.
+- `CALL`
+  The request owns a future created by `wasmtime_func_call_async(...)` until
+  the guest export either completes or yields.
+- `COMPLETE`
+  The future is deleted and normal response/error handling continues.
+
 Planned suspend/resume model:
 
 - guest execution is always tied to an `ngx_http_request_t`
@@ -95,3 +127,13 @@ Current copy policy:
 That response-body copy is intentional for correctness. Guest linear memory is
 owned by the Wasmtime store and cannot safely outlive the invocation or be used
 as an NGINX output buffer without stronger lifetime guarantees.
+
+Fuel semantics to preserve:
+
+- `timeslice_fuel`
+  Cooperative scheduling budget. When exhausted in async mode, execution should
+  yield with `RESCHEDULE` and continue on the next poll.
+- `fuel_limit`
+  Total request budget. This remains a terminal limit. The runtime should stop
+  polling and fail once the total request budget is exhausted rather than
+  rescheduling forever.

@@ -10,6 +10,9 @@ use File::Spec;
 our @EXPORT_OK = qw(
     wasm_root
     hello_world_wasm
+    fuel_yield_wasm
+    fuel_yield_rust_wasm
+    fuel_multi_yield_wasm
     manual_yield_wasm
     multi_yield_wasm
     missing_export_wasm
@@ -35,6 +38,18 @@ sub wasm_root {
 
 sub hello_world_wasm {
     return wasm_root() . "/wasm/hello-world/build/hello_world.wasm";
+}
+
+sub fuel_yield_wasm {
+    return wasm_root() . "/wasm/hello-world/src/fuel_yield.wat";
+}
+
+sub fuel_yield_rust_wasm {
+    return wasm_root() . "/wasm/hello-world/build/fuel_yield_rust.wasm";
+}
+
+sub fuel_multi_yield_wasm {
+    return wasm_root() . "/wasm/hello-world/src/fuel_multi_yield.wat";
 }
 
 sub manual_yield_wasm {

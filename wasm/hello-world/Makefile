@@ -3,8 +3,10 @@ RUSTUP ?= $(shell command -v rustup)
 WASM_TARGET ?= wasm32-unknown-unknown
 RUSTFLAGS ?=
 OUT_DIR ?= build
-OUT ?= $(OUT_DIR)/hello_world.wasm
-SRC ?= src/hello_world.rs
+
+TARGETS = \
+	$(OUT_DIR)/hello_world.wasm \
+	$(OUT_DIR)/fuel_yield_rust.wasm
 
 .PHONY: build clean check-toolchain
 
@@ -21,7 +23,7 @@ TARGET_GUIDE = \
 	echo "Or rerun: make deps"; \
 	false
 
-build: check-toolchain $(OUT)
+build: check-toolchain $(TARGETS)
 
 check-toolchain:
 ifndef RUSTC
@@ -32,7 +34,12 @@ ifdef RUSTUP
 	($(TARGET_GUIDE))
 endif
 
-$(OUT): $(SRC)
+$(OUT_DIR)/hello_world.wasm: src/hello_world.rs
+	mkdir -p $(OUT_DIR)
+	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
+		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
+
+$(OUT_DIR)/fuel_yield_rust.wasm: src/fuel_yield.rs
 	mkdir -p $(OUT_DIR)
 	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<

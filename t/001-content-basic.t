@@ -6,7 +6,7 @@ use TestWasm ();
 use Test::Nginx::Socket -Base;
 
 repeat_each(1);
-plan tests => repeat_each() * 14;
+plan tests => repeat_each() * 18;
 
 our $HttpConfig = '';
 
@@ -68,20 +68,20 @@ qq{
 ]
 
 
-=== TEST 4: content_by_wasm honors explicit timeslice fuel
+=== TEST 4: timeslice fuel yield resumes and completes
 --- config eval
 qq{
     location /wasm {
-        wasm_fuel_limit 1000000;
-        wasm_timeslice_fuel 1000000;
-        content_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
+        wasm_fuel_limit 10000000;
+        wasm_timeslice_fuel 1000;
+        content_by_wasm @{[ TestWasm::fuel_yield_wasm() ]} on_content;
     }
 }
 --- request
 GET /wasm
 --- error_code: 200
 --- response_body
-hello from guest wasm
+hello after fuel yield
 
 
 === TEST 5: manual yield resumes and completes
@@ -110,3 +110,35 @@ GET /wasm
 --- error_code: 200
 --- response_body
 hello after two yields
+
+
+=== TEST 7: repeated timeslice fuel yields resume and complete
+--- config eval
+qq{
+    location /wasm {
+        wasm_fuel_limit 10000000;
+        wasm_timeslice_fuel 100;
+        content_by_wasm @{[ TestWasm::fuel_multi_yield_wasm() ]} on_content;
+    }
+}
+--- request
+GET /wasm
+--- error_code: 200
+--- response_body
+hello after many fuel yields
+
+
+=== TEST 8: compiled wasm fuel yield resumes and completes
+--- config eval
+qq{
+    location /wasm {
+        wasm_fuel_limit 10000000;
+        wasm_timeslice_fuel 1000;
+        content_by_wasm @{[ TestWasm::fuel_yield_rust_wasm() ]} on_content;
+    }
+}
+--- request
+GET /wasm
+--- error_code: 200
+--- response_body
+hello after rust fuel yield
