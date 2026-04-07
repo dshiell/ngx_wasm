@@ -73,6 +73,11 @@ static ngx_int_t
 ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
                                   wasmtime_context_t *context,
                                   const char *phase);
+static void
+ngx_http_wasm_runtime_clear_async_outcome(ngx_http_wasm_resume_state_t *resume);
+static ngx_int_t
+ngx_http_wasm_runtime_prepare_async_yield(ngx_http_wasm_exec_ctx_t *ctx,
+                                          wasmtime_context_t *context);
 static wasm_trap_t *ngx_http_wasm_runtime_get_memory(wasmtime_caller_t *caller,
                                                      uint32_t ptr,
                                                      uint32_t len,
@@ -131,6 +136,7 @@ ngx_int_t ngx_http_wasm_runtime_init(ngx_conf_t *cf,
     }
 
     wasmtime_config_consume_fuel_set(config, true);
+    wasmtime_config_async_support_set(config, true);
     wasmtime_config_parallel_compilation_set(config, false);
 #if (NGX_DARWIN)
     wasmtime_config_macos_use_mach_ports_set(config, false);
@@ -557,6 +563,42 @@ ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
     return NGX_OK;
 }
 
+static void
+ngx_http_wasm_runtime_clear_async_outcome(ngx_http_wasm_resume_state_t *resume) {
+    if (resume->future != NULL) {
+        wasmtime_call_future_delete(resume->future);
+        resume->future = NULL;
+    }
+    resume->future_kind = NGX_HTTP_WASM_FUTURE_NONE;
+}
+
+static ngx_int_t
+ngx_http_wasm_runtime_prepare_async_yield(ngx_http_wasm_exec_ctx_t *ctx,
+                                          wasmtime_context_t *context) {
+    uint64_t interval;
+    wasmtime_error_t *error;
+
+    if (ctx->fuel_remaining == 0) {
+        return NGX_ERROR;
+    }
+
+    interval = ctx->fuel_remaining;
+    if (ctx->timeslice_fuel > 0 && ctx->timeslice_fuel < interval) {
+        interval = ctx->timeslice_fuel;
+    }
+
+    error = wasmtime_context_fuel_async_yield_interval(context, interval);
+    if (error != NULL) {
+        ngx_http_wasm_runtime_log_error(
+            ctx->request->connection->log,
+            "failed to configure async fuel yield interval",
+            error);
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
+}
+
 static wasm_trap_t *ngx_http_wasm_runtime_bad_signature(const char *name) {
     return wasmtime_trap_new(name, ngx_strlen(name));
 }
@@ -713,12 +755,10 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     ngx_http_wasm_runtime_state_t *rt;
     wasmtime_context_t *context;
     wasmtime_extern_t item;
-    wasmtime_val_t result;
+    wasmtime_call_future_t *future;
     wasmtime_error_t *error;
-    wasm_trap_t *trap;
-    uint64_t fuel_slice;
-    uint64_t fuel_before;
-    uint64_t fuel_after;
+    bool complete;
+    bool new_store;
 
     rt = ctx->runtime;
     if (rt == NULL || rt->engine == NULL || rt->linker == NULL) {
@@ -752,11 +792,8 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         ctx->resume_state = resume;
     }
 
-    ctx->state = NGX_HTTP_WASM_EXEC_RUNNING;
-    ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_NONE;
-    ctx->yielded = 0;
-
-    if (resume->store == NULL) {
+    new_store = (resume->store == NULL);
+    if (new_store) {
         resume->store = wasmtime_store_new(rt->engine, ctx, NULL);
     }
 
@@ -770,36 +807,120 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     }
 
     context = wasmtime_store_context(resume->store);
-    fuel_slice = ctx->fuel_remaining;
-    if (ctx->timeslice_fuel > 0 && ctx->timeslice_fuel < fuel_slice) {
-        fuel_slice = ctx->timeslice_fuel;
-    }
-    fuel_before = fuel_slice;
-
-    error = wasmtime_context_set_fuel(context, fuel_slice);
-    if (error != NULL) {
-        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-        ngx_http_wasm_runtime_log_error(
-            ctx->request->connection->log, "failed to set fuel", error);
-        return NGX_ERROR;
-    }
-
-    if (!resume->instance_ready) {
-        trap = NULL;
-        error = wasmtime_linker_instantiate(
-            rt->linker, context, module->module, &resume->instance, &trap);
+    if (new_store && ctx->fuel_limit > 0) {
+        error = wasmtime_context_set_fuel(context, ctx->fuel_limit);
         if (error != NULL) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-            ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
-                                            "failed to instantiate module",
-                                            error);
+            ngx_http_wasm_runtime_log_error(
+                ctx->request->connection->log, "failed to set fuel", error);
+            return NGX_ERROR;
+        }
+    }
+
+    ctx->state = NGX_HTTP_WASM_EXEC_RUNNING;
+    ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_NONE;
+    ctx->yielded = 0;
+
+    if (!resume->instance_ready) {
+        if (resume->future == NULL) {
+            if (ngx_http_wasm_runtime_prepare_async_yield(ctx, context) !=
+                NGX_OK) {
+                ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+                return NGX_ERROR;
+            }
+
+            resume->trap = NULL;
+            resume->error = NULL;
+            resume->future_kind = NGX_HTTP_WASM_FUTURE_INSTANTIATE;
+            resume->future =
+                wasmtime_linker_instantiate_async(rt->linker,
+                                                  context,
+                                                  module->module,
+                                                  &resume->instance,
+                                                  &resume->trap,
+                                                  &resume->error);
+            if (resume->future == NULL) {
+                ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+                if (resume->error != NULL) {
+                    ngx_http_wasm_runtime_log_error(
+                        ctx->request->connection->log,
+                        "failed to start async instantiation",
+                        resume->error);
+                    resume->error = NULL;
+                } else if (resume->trap != NULL) {
+                    ngx_http_wasm_runtime_log_trap(
+                        ctx->request->connection->log,
+                        "module start trap",
+                        resume->trap);
+                    resume->trap = NULL;
+                } else {
+                    ngx_log_error(NGX_LOG_ERR,
+                                  ctx->request->connection->log,
+                                  0,
+                                  "ngx_wasm: failed to create instantiation "
+                                  "future");
+                }
+                resume->future_kind = NGX_HTTP_WASM_FUTURE_NONE;
+                return NGX_ERROR;
+            }
+        }
+
+        complete = wasmtime_call_future_poll(resume->future);
+        if (!complete) {
+            if (ngx_http_wasm_runtime_update_fuel(
+                    ctx,
+                    context,
+                    "failed to read remaining fuel after async instantiate "
+                    "yield") != NGX_OK) {
+                ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+                return NGX_ERROR;
+            }
+
+            if (ctx->fuel_remaining == 0) {
+                ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+                ngx_log_error(NGX_LOG_ERR,
+                              ctx->request->connection->log,
+                              0,
+                              "ngx_wasm: guest interrupted during "
+                              "instantiation: fuel_limit=%uL "
+                              "timeslice_fuel=%uL fuel_remaining=%uL",
+                              (unsigned long long)ctx->fuel_limit,
+                              (unsigned long long)ctx->timeslice_fuel,
+                              (unsigned long long)ctx->fuel_remaining);
+                return NGX_ERROR;
+            }
+
+            ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
+            ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
+            return NGX_AGAIN;
+        }
+
+        ngx_http_wasm_runtime_clear_async_outcome(resume);
+
+        if (ngx_http_wasm_runtime_update_fuel(
+                ctx,
+                context,
+                "failed to read remaining fuel after async instantiation") !=
+            NGX_OK) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
             return NGX_ERROR;
         }
 
-        if (trap != NULL) {
+        if (resume->error != NULL) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+            ngx_http_wasm_runtime_log_error(
+                ctx->request->connection->log,
+                "failed to instantiate module",
+                resume->error);
+            resume->error = NULL;
+            return NGX_ERROR;
+        }
+
+        if (resume->trap != NULL) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
             ngx_http_wasm_runtime_log_trap(
-                ctx->request->connection->log, "module start trap", trap);
+                ctx->request->connection->log, "module start trap", resume->trap);
+            resume->trap = NULL;
             return NGX_ERROR;
         }
 
@@ -828,55 +949,64 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         resume->func_ready = 1;
     }
 
-    trap = NULL;
-    error =
-        wasmtime_func_call(context, &resume->func, NULL, 0, &result, 1, &trap);
+    if (resume->future == NULL) {
+        if (ngx_http_wasm_runtime_prepare_async_yield(ctx, context) != NGX_OK) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+            return NGX_ERROR;
+        }
 
-    if (error != NULL) {
-        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-        ngx_http_wasm_runtime_log_error(
-            ctx->request->connection->log, "guest call failed", error);
-        return NGX_ERROR;
-    }
-
-    error = wasmtime_context_get_fuel(context, &fuel_after);
-    if (error != NULL) {
-        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-        ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
-                                        "failed to read remaining fuel",
-                                        error);
-        return NGX_ERROR;
-    }
-
-    if (fuel_before >= fuel_after) {
-        ctx->fuel_remaining -= (fuel_before - fuel_after);
-    } else {
-        ctx->fuel_remaining = 0;
-    }
-
-    if (ctx->yielded) {
-        ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
-        ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
-        return NGX_AGAIN;
-    }
-
-    if (trap != NULL) {
-        wasmtime_trap_code_t code;
-
-        if (wasmtime_trap_code(trap, &code) &&
-            (code == WASMTIME_TRAP_CODE_OUT_OF_FUEL ||
-             code == WASMTIME_TRAP_CODE_INTERRUPT)) {
-            if (ngx_http_wasm_runtime_update_fuel(
-                    ctx,
-                    context,
-                    "failed to read remaining fuel after interruption") !=
-                NGX_OK) {
-                ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-                return NGX_ERROR;
+        resume->trap = NULL;
+        resume->error = NULL;
+        resume->results[0].kind = WASMTIME_I32;
+        resume->results[0].of.i32 = 0;
+        resume->future_kind = NGX_HTTP_WASM_FUTURE_CALL;
+        resume->future = wasmtime_func_call_async(context,
+                                                  &resume->func,
+                                                  NULL,
+                                                  0,
+                                                  resume->results,
+                                                  1,
+                                                  &resume->trap,
+                                                  &resume->error);
+        if (resume->future == NULL) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+            if (resume->error != NULL) {
+                ngx_http_wasm_runtime_log_error(
+                    ctx->request->connection->log,
+                    "failed to start async guest call",
+                    resume->error);
+                resume->error = NULL;
+            } else if (resume->trap != NULL) {
+                ngx_http_wasm_runtime_log_trap(
+                    ctx->request->connection->log,
+                    "guest trapped before execution",
+                    resume->trap);
+                resume->trap = NULL;
+            } else {
+                ngx_log_error(NGX_LOG_ERR,
+                              ctx->request->connection->log,
+                              0,
+                              "ngx_wasm: failed to create guest call future");
             }
+            resume->future_kind = NGX_HTTP_WASM_FUTURE_NONE;
+            return NGX_ERROR;
+        }
+    }
 
-            ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
-            ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
+    future = resume->future;
+    complete = wasmtime_call_future_poll(future);
+    if (!complete) {
+        if (ngx_http_wasm_runtime_update_fuel(
+                ctx,
+                context,
+                "failed to read remaining fuel after async call yield") !=
+            NGX_OK) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+            return NGX_ERROR;
+        }
+
+        if (ctx->fuel_remaining == 0) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
             ngx_log_error(NGX_LOG_ERR,
                           ctx->request->connection->log,
                           0,
@@ -885,24 +1015,73 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                           (unsigned long long)ctx->fuel_limit,
                           (unsigned long long)ctx->timeslice_fuel,
                           (unsigned long long)ctx->fuel_remaining);
-            wasm_trap_delete(trap);
+            return NGX_ERROR;
+        }
+
+        ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
+        ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
+        return NGX_AGAIN;
+    }
+
+    ngx_http_wasm_runtime_clear_async_outcome(resume);
+
+    if (ngx_http_wasm_runtime_update_fuel(
+            ctx, context, "failed to read remaining fuel after async call") !=
+        NGX_OK) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+        return NGX_ERROR;
+    }
+
+    if (resume->error != NULL) {
+        ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+        ngx_http_wasm_runtime_log_error(
+            ctx->request->connection->log, "guest call failed", resume->error);
+        resume->error = NULL;
+        return NGX_ERROR;
+    }
+
+    if (ctx->yielded) {
+        ctx->state = NGX_HTTP_WASM_EXEC_SUSPENDED;
+        ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_RESCHEDULE;
+        return NGX_AGAIN;
+    }
+
+    if (resume->trap != NULL) {
+        wasmtime_trap_code_t code;
+
+        if (wasmtime_trap_code(resume->trap, &code) &&
+            (code == WASMTIME_TRAP_CODE_OUT_OF_FUEL ||
+             code == WASMTIME_TRAP_CODE_INTERRUPT)) {
+            ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
+            ngx_log_error(NGX_LOG_ERR,
+                          ctx->request->connection->log,
+                          0,
+                          "ngx_wasm: guest interrupted: fuel_limit=%uL "
+                          "timeslice_fuel=%uL fuel_remaining=%uL",
+                          (unsigned long long)ctx->fuel_limit,
+                          (unsigned long long)ctx->timeslice_fuel,
+                          (unsigned long long)ctx->fuel_remaining);
+            wasm_trap_delete(resume->trap);
+            resume->trap = NULL;
             return NGX_ERROR;
         }
 
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_http_wasm_runtime_log_trap(
-            ctx->request->connection->log, "guest trapped", trap);
+            ctx->request->connection->log, "guest trapped", resume->trap);
+        resume->trap = NULL;
         return NGX_ERROR;
     }
 
-    if (result.kind != WASMTIME_I32 || result.of.i32 != 0) {
+    if (resume->results[0].kind != WASMTIME_I32 ||
+        resume->results[0].of.i32 != 0) {
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
                       ctx->request->connection->log,
                       0,
                       "ngx_wasm: guest export \"%V\" returned %d",
                       &ctx->conf->export_name,
-                      (int)result.of.i32);
+                      (int)resume->results[0].of.i32);
         return NGX_ERROR;
     }
 
