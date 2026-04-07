@@ -563,8 +563,8 @@ ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
     return NGX_OK;
 }
 
-static void
-ngx_http_wasm_runtime_clear_async_outcome(ngx_http_wasm_resume_state_t *resume) {
+static void ngx_http_wasm_runtime_clear_async_outcome(
+    ngx_http_wasm_resume_state_t *resume) {
     if (resume->future != NULL) {
         wasmtime_call_future_delete(resume->future);
         resume->future = NULL;
@@ -908,18 +908,18 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
 
         if (resume->error != NULL) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-            ngx_http_wasm_runtime_log_error(
-                ctx->request->connection->log,
-                "failed to instantiate module",
-                resume->error);
+            ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
+                                            "failed to instantiate module",
+                                            resume->error);
             resume->error = NULL;
             return NGX_ERROR;
         }
 
         if (resume->trap != NULL) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-            ngx_http_wasm_runtime_log_trap(
-                ctx->request->connection->log, "module start trap", resume->trap);
+            ngx_http_wasm_runtime_log_trap(ctx->request->connection->log,
+                                           "module start trap",
+                                           resume->trap);
             resume->trap = NULL;
             return NGX_ERROR;
         }
@@ -977,10 +977,9 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                     resume->error);
                 resume->error = NULL;
             } else if (resume->trap != NULL) {
-                ngx_http_wasm_runtime_log_trap(
-                    ctx->request->connection->log,
-                    "guest trapped before execution",
-                    resume->trap);
+                ngx_http_wasm_runtime_log_trap(ctx->request->connection->log,
+                                               "guest trapped before execution",
+                                               resume->trap);
                 resume->trap = NULL;
             } else {
                 ngx_log_error(NGX_LOG_ERR,

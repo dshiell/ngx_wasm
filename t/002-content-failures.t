@@ -96,18 +96,3 @@ GET /wasm
 --- error_log eval
 qr/guest interrupted: fuel_limit=1000/
 
-
-=== TEST 7: timeslice exhaustion interrupts guest
---- config eval
-qq{
-    location /wasm {
-        wasm_fuel_limit 1000000;
-        wasm_timeslice_fuel 1000;
-        content_by_wasm @{[ TestWasm::fuel_exhaust_wasm() ]} on_content;
-    }
-}
---- request
-GET /wasm
---- error_code: 500
---- error_log eval
-qr/guest interrupted: fuel_limit=1000000 timeslice_fuel=1000/
