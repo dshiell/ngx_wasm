@@ -86,7 +86,7 @@ static ngx_command_t ngx_http_wasm_commands[] = {
     ngx_null_command};
 
 static ngx_http_module_t ngx_http_wasm_module_ctx = {
-    NULL,                           /* preconfiguration */
+    NULL,                            /* preconfiguration */
     ngx_http_wasm_postconfiguration, /* postconfiguration */
 
     ngx_http_wasm_create_main_conf, /* create main configuration */
@@ -147,9 +147,8 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
     return NGX_CONF_OK;
 }
 
-static void
-ngx_http_wasm_merge_phase_conf(ngx_http_wasm_phase_conf_t *parent,
-                               ngx_http_wasm_phase_conf_t *child) {
+static void ngx_http_wasm_merge_phase_conf(ngx_http_wasm_phase_conf_t *parent,
+                                           ngx_http_wasm_phase_conf_t *child) {
     ngx_conf_merge_value(child->set, parent->set, 0);
 
     if (child->module == NULL && parent->module != NULL) {
@@ -289,8 +288,8 @@ static void ngx_http_wasm_exit_process(ngx_cycle_t *cycle) {
     ngx_http_wasm_runtime_destroy(wmcf);
 }
 
-static ngx_int_t ngx_http_wasm_configure_phase(ngx_conf_t *cf,
-                                               ngx_http_wasm_phase_conf_t *dst) {
+static ngx_int_t
+ngx_http_wasm_configure_phase(ngx_conf_t *cf, ngx_http_wasm_phase_conf_t *dst) {
     ngx_http_wasm_main_conf_t *wmcf;
     ngx_str_t *value;
 
@@ -313,7 +312,8 @@ static ngx_int_t ngx_http_wasm_configure_phase(ngx_conf_t *cf,
         return NGX_ERROR;
     }
 
-    dst->module = ngx_http_wasm_runtime_get_or_load(cf, wmcf, &dst->module_path);
+    dst->module =
+        ngx_http_wasm_runtime_get_or_load(cf, wmcf, &dst->module_path);
     if (dst->module == NULL) {
         return NGX_ERROR;
     }
@@ -329,12 +329,12 @@ ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     wcf = conf;
 
     switch (ngx_http_wasm_configure_phase(cf, &wcf->content)) {
-    case NGX_OK:
-        return NGX_CONF_OK;
-    case NGX_DECLINED:
-        return "is duplicate";
-    default:
-        return NGX_CONF_ERROR;
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
     }
 }
 
@@ -346,12 +346,12 @@ ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     wcf = conf;
 
     switch (ngx_http_wasm_configure_phase(cf, &wcf->rewrite)) {
-    case NGX_OK:
-        return NGX_CONF_OK;
-    case NGX_DECLINED:
-        return "is duplicate";
-    default:
-        return NGX_CONF_ERROR;
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
     }
 }
 
@@ -466,10 +466,11 @@ static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
     }
 
     if (ctx->exec.conf != phase) {
-        ngx_log_error(NGX_LOG_ERR,
-                      r->connection->log,
-                      0,
-                      "ngx_wasm: request context already bound to a different phase");
+        ngx_log_error(
+            NGX_LOG_ERR,
+            r->connection->log,
+            0,
+            "ngx_wasm: request context already bound to a different phase");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -504,7 +505,8 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
     cln->data = &ctx->exec;
 
     if (wcf->rewrite.set == 1) {
-        ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec, r, &wcf->rewrite, wmcf->runtime);
+        ngx_http_wasm_runtime_init_exec_ctx(
+            &ctx->exec, r, &wcf->rewrite, wmcf->runtime);
         ctx->exec.fuel_limit = wcf->fuel_limit;
         ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
         ctx->exec.fuel_remaining = wcf->fuel_limit;
@@ -512,7 +514,8 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
     }
 
     if (wcf->content.set == 1) {
-        ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec, r, &wcf->content, wmcf->runtime);
+        ngx_http_wasm_runtime_init_exec_ctx(
+            &ctx->exec, r, &wcf->content, wmcf->runtime);
         ctx->exec.fuel_limit = wcf->fuel_limit;
         ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
         ctx->exec.fuel_remaining = wcf->fuel_limit;

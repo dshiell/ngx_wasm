@@ -1,0 +1,42 @@
+#ifndef _NGX_WASM_GUEST_ABI_H_INCLUDED_
+#define _NGX_WASM_GUEST_ABI_H_INCLUDED_
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define NGX_WASM_ABI_VERSION 1
+
+#define NGX_WASM_OK 0
+#define NGX_WASM_ERROR -1
+
+#define NGX_WASM_LOG_STDERR 0
+#define NGX_WASM_LOG_EMERG 1
+#define NGX_WASM_LOG_ALERT 2
+#define NGX_WASM_LOG_CRIT 3
+#define NGX_WASM_LOG_ERR 4
+#define NGX_WASM_LOG_WARN 5
+#define NGX_WASM_LOG_NOTICE 6
+#define NGX_WASM_LOG_INFO 7
+#define NGX_WASM_LOG_DEBUG 8
+
+#if defined(__GNUC__) || defined(__clang__)
+#define NGX_WASM_EXPORT(name) __attribute__((export_name(name)))
+#else
+#define NGX_WASM_EXPORT(name)
+#endif
+
+int ngx_wasm_log(int level, const void *ptr, int len);
+int ngx_wasm_resp_set_status(int status);
+int ngx_wasm_req_set_header(const void *name_ptr,
+                            int name_len,
+                            const void *value_ptr,
+                            int value_len);
+int ngx_wasm_resp_write(const void *ptr, int len);
+int ngx_wasm_yield(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _NGX_WASM_GUEST_ABI_H_INCLUDED_ */

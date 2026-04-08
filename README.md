@@ -211,6 +211,7 @@ guest fixtures.
 - Design notes: [design.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/design.md)
 - Testing plan: [testing.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/testing.md)
 - Guest ABI: [abi.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/abi.md)
+- Guest ABI header: [ngx_wasm_guest_abi.h](/Users/derek/projects/nginx-playground/ngx_wasm/include/ngx_wasm_guest_abi.h)
 
 ## Status
 

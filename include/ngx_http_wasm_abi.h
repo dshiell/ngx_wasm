@@ -41,6 +41,11 @@ ngx_int_t ngx_http_wasm_abi_log(ngx_http_wasm_abi_ctx_t *ctx,
                                 size_t len);
 ngx_int_t ngx_http_wasm_abi_resp_set_status(ngx_http_wasm_abi_ctx_t *ctx,
                                             ngx_int_t status);
+ngx_int_t ngx_http_wasm_abi_req_set_header(ngx_http_wasm_abi_ctx_t *ctx,
+                                           const u_char *name,
+                                           size_t name_len,
+                                           const u_char *value,
+                                           size_t value_len);
 ngx_int_t ngx_http_wasm_abi_resp_set_content_type(ngx_http_wasm_abi_ctx_t *ctx,
                                                   const u_char *data,
                                                   size_t len,
