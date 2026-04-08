@@ -6,7 +6,7 @@ use TestWasm ();
 use Test::Nginx::Socket -Base;
 
 repeat_each(1);
-plan tests => repeat_each() * 18;
+plan tests => repeat_each() * 28;
 
 our $HttpConfig = '';
 
@@ -142,3 +142,62 @@ GET /wasm
 --- error_code: 200
 --- response_body
 hello after rust fuel yield
+
+
+=== TEST 9: normal request still completes after a suspended request flow
+--- config eval
+qq{
+    location /yield {
+        content_by_wasm @{[ TestWasm::manual_yield_wasm() ]} on_content;
+    }
+
+    location /fast {
+        content_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
+    }
+}
+--- request eval
+[
+    "GET /yield",
+    "GET /fast",
+]
+--- error_code eval
+[
+    200,
+    200,
+]
+--- response_body eval
+[
+    "hello after manual yield\n",
+    "hello from guest wasm\n",
+]
+
+
+=== TEST 10: sequential requests around a suspending request stay isolated
+--- config eval
+qq{
+    location /yield {
+        content_by_wasm @{[ TestWasm::multi_yield_wasm() ]} on_content;
+    }
+
+    location /fast {
+        content_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
+    }
+}
+--- request eval
+[
+    "GET /fast",
+    "GET /yield",
+    "GET /fast",
+]
+--- error_code eval
+[
+    200,
+    200,
+    200,
+]
+--- response_body eval
+[
+    "hello from guest wasm\n",
+    "hello after two yields\n",
+    "hello from guest wasm\n",
+]
