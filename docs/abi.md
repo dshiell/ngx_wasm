@@ -15,6 +15,7 @@ Status: early and intentionally narrow. Expect changes as the module evolves.
 Current Phase 1 execution model:
 
 - one guest export is invoked for `content_by_wasm`
+- one guest export is invoked for `rewrite_by_wasm`
 - one request-local invocation per request
 - guest code runs inside a fresh Wasmtime store per invocation
 - host state is request-local
@@ -31,6 +32,10 @@ int on_content(void);
 Current nginx configuration shape:
 
 ```nginx
+location /rewrite {
+    rewrite_by_wasm /path/to/module.wasm on_content;
+}
+
 location /wasm {
     content_by_wasm /path/to/module.wasm on_content;
 }
