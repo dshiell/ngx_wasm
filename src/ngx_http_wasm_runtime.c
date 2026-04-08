@@ -240,6 +240,7 @@ void ngx_http_wasm_runtime_init_exec_ctx(
     ngx_http_wasm_exec_ctx_t *ctx,
     ngx_http_request_t *r,
     ngx_http_wasm_phase_conf_t *conf,
+    ngx_http_wasm_phase_e phase_kind,
     ngx_http_wasm_runtime_state_t *runtime) {
     ngx_memzero(ctx, sizeof(*ctx));
 
@@ -251,6 +252,7 @@ void ngx_http_wasm_runtime_init_exec_ctx(
     ctx->fuel_remaining = 0;
     ctx->state = NGX_HTTP_WASM_EXEC_READY;
     ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_NONE;
+    ctx->phase_kind = phase_kind;
     ctx->resume_state = NULL;
     ctx->yielded = 0;
 

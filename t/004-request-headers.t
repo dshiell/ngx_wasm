@@ -6,7 +6,7 @@ use TestWasm ();
 use Test::Nginx::Socket -Base;
 
 repeat_each(1);
-plan tests => repeat_each() * 4;
+plan tests => repeat_each() * blocks() * 3;
 
 our $HttpConfig = '';
 

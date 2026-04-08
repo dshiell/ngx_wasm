@@ -506,7 +506,11 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
 
     if (wcf->rewrite.set == 1) {
         ngx_http_wasm_runtime_init_exec_ctx(
-            &ctx->exec, r, &wcf->rewrite, wmcf->runtime);
+            &ctx->exec,
+            r,
+            &wcf->rewrite,
+            NGX_HTTP_WASM_PHASE_REWRITE,
+            wmcf->runtime);
         ctx->exec.fuel_limit = wcf->fuel_limit;
         ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
         ctx->exec.fuel_remaining = wcf->fuel_limit;
@@ -515,7 +519,11 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
 
     if (wcf->content.set == 1) {
         ngx_http_wasm_runtime_init_exec_ctx(
-            &ctx->exec, r, &wcf->content, wmcf->runtime);
+            &ctx->exec,
+            r,
+            &wcf->content,
+            NGX_HTTP_WASM_PHASE_CONTENT,
+            wmcf->runtime);
         ctx->exec.fuel_limit = wcf->fuel_limit;
         ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
         ctx->exec.fuel_remaining = wcf->fuel_limit;
@@ -560,9 +568,15 @@ static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
 
-        if (!ctx->waiting) {
+        if (!ctx->waiting
+            && ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_CONTENT)
+        {
             ctx->waiting = 1;
             r->main->count++;
+        }
+
+        if (!ctx->waiting) {
+            ctx->waiting = 1;
         }
 
         return NGX_DONE;
