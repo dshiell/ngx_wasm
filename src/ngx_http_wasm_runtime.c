@@ -596,8 +596,8 @@ ngx_http_wasm_runtime_suspend(ngx_http_wasm_exec_ctx_t *ctx,
     return NGX_AGAIN;
 }
 
-static void ngx_http_wasm_runtime_clear_async_future(
-    ngx_http_wasm_resume_state_t *resume) {
+static void
+ngx_http_wasm_runtime_clear_async_future(ngx_http_wasm_resume_state_t *resume) {
     if (resume->future != NULL) {
         wasmtime_call_future_delete(resume->future);
         resume->future = NULL;
@@ -605,8 +605,8 @@ static void ngx_http_wasm_runtime_clear_async_future(
     resume->future_kind = NGX_HTTP_WASM_FUTURE_NONE;
 }
 
-static void
-ngx_http_wasm_runtime_clear_async_outputs(ngx_http_wasm_resume_state_t *resume) {
+static void ngx_http_wasm_runtime_clear_async_outputs(
+    ngx_http_wasm_resume_state_t *resume) {
     if (resume->trap != NULL) {
         wasm_trap_delete(resume->trap);
         resume->trap = NULL;
