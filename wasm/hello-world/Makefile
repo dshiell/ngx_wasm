@@ -6,6 +6,7 @@ OUT_DIR ?= build
 
 TARGETS = \
 	$(OUT_DIR)/hello_world.wasm \
+	$(OUT_DIR)/health.wasm \
 	$(OUT_DIR)/fuel_yield_rust.wasm
 
 .PHONY: build clean check-toolchain
@@ -35,6 +36,11 @@ ifdef RUSTUP
 endif
 
 $(OUT_DIR)/hello_world.wasm: src/hello_world.rs
+	mkdir -p $(OUT_DIR)
+	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
+		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
+
+$(OUT_DIR)/health.wasm: src/health.rs
 	mkdir -p $(OUT_DIR)
 	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
