@@ -80,3 +80,21 @@ GET /rewrite-yield
 X-Wasm-Test: set-after-yield
 --- response_body
 header set after yield
+
+
+=== TEST 5: rewrite_by_wasm header mutation is visible to content phase
+--- config eval
+qq{
+    location /rewrite-to-content {
+        add_header X-Wasm-Test \$http_x_wasm_test always;
+        rewrite_by_wasm @{[ TestWasm::req_header_set_wasm() ]} on_content;
+        content_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
+    }
+}
+--- request
+GET /rewrite-to-content
+--- error_code: 200
+--- response_headers
+X-Wasm-Test: set-by-guest
+--- response_body
+header set
