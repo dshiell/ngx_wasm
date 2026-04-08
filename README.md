@@ -121,6 +121,21 @@ curl http://127.0.0.1:18080/health
 make stop
 ```
 
+Run a repeatable ApacheBench sweep against both wasm endpoints:
+
+```sh
+make bench-ab
+```
+
+Override the benchmark shape when needed:
+
+```sh
+make bench-ab BENCH_AB_REQUESTS=50000 BENCH_AB_CONCURRENCIES="100 500 1000 2000"
+```
+
+The benchmark target uses `127.0.0.1:18081` by default so it does not collide
+with `make start` on `127.0.0.1:18080`.
+
 `make wasm` builds all current guest modules required by the example and test
 suite.
 

@@ -55,6 +55,13 @@ FAILURES_DIR = wasm/failures
 LOADTEST_RUN_DIR ?= $(CURDIR)/run/loadtest
 LOADTEST_PORT ?= 18080
 LOADTEST_HOST ?= 127.0.0.1
+BENCH_AB_RUN_DIR ?= $(CURDIR)/run/bench-ab
+BENCH_AB_PORT ?= 18081
+BENCH_AB_REQUESTS ?= 100000
+BENCH_AB_CONCURRENCIES ?= 50 200 500 1000
+BENCH_AB_ENDPOINTS ?= hello health
+BENCH_AB_KEEPALIVE ?= 1
+BENCH_AB_OUTPUT_DIR ?= $(BENCH_AB_RUN_DIR)/benchmarks
 
 ifeq ($(BUILD_SANITIZE),1)
 NGINX_CONFIGURE_ARGS = \
@@ -66,7 +73,7 @@ else
 NGINX_CONFIGURE_ARGS = --add-module="$(CURDIR)"
 endif
 
-.PHONY: format check-format wasm deps nginx-build build start stop smoke test test-reload clean
+.PHONY: format check-format wasm deps nginx-build build start stop bench-ab smoke test test-reload clean
 
 format:
 ifeq ($(strip $(CLANG_FORMAT)),)
@@ -109,6 +116,13 @@ stop:
 	RUN_DIR="$(LOADTEST_RUN_DIR)" NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" \
 	./scripts/stop-loadtest.sh
 
+bench-ab:
+	PORT="$(BENCH_AB_PORT)" HOST="$(LOADTEST_HOST)" RUN_DIR="$(BENCH_AB_RUN_DIR)" \
+	OUT_DIR="$(BENCH_AB_OUTPUT_DIR)" REQUESTS="$(BENCH_AB_REQUESTS)" \
+	CONCURRENCIES="$(BENCH_AB_CONCURRENCIES)" ENDPOINTS="$(BENCH_AB_ENDPOINTS)" \
+	KEEPALIVE="$(BENCH_AB_KEEPALIVE)" NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" \
+	./scripts/bench-ab.sh
+
 smoke:
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/smoke-content-by-wasm.sh
 
@@ -124,4 +138,4 @@ clean:
 	$(MAKE) -C $(HELLO_WORLD_DIR) clean
 	$(MAKE) -C $(FAILURES_DIR) clean
 	rm -f "$(NGINX_BUILD_INFO)"
-	rm -rf t/servroot*
+	rm -rf t/servroot* run

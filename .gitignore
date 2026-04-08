@@ -1,6 +1,8 @@
 /target/
 /runtime/target/
 /wasm/*/target/
+/run
+
 *.o
 *.so
 *.dylib

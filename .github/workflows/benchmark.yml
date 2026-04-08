@@ -1,0 +1,83 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      requests:
+        description: ApacheBench request count per concurrency level
+        required: false
+        default: "50000"
+      concurrencies:
+        description: Space-separated ApacheBench concurrency levels
+        required: false
+        default: "50 200 500 1000"
+      endpoints:
+        description: Space-separated endpoint names to benchmark
+        required: false
+        default: "hello health"
+
+jobs:
+  bench-ab:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout ngx_wasm
+        uses: actions/checkout@v4
+
+      - name: Checkout nginx
+        uses: actions/checkout@v4
+        with:
+          repository: nginx/nginx
+          path: nginx
+
+      - name: Cache Wasmtime C API
+        uses: actions/cache@v4
+        with:
+          path: third_party/wasmtime-*
+          key: ${{ runner.os }}-wasmtime-${{ hashFiles('Makefile', 'scripts/fetch-wasmtime.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-wasmtime-
+
+      - name: Install benchmark dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            libclang-rt-dev \
+            perl \
+            cpanminus \
+            curl \
+            xz-utils \
+            apache2-utils
+
+      - name: Fetch pinned project dependencies
+        run: make deps
+
+      - name: Build nginx and wasm fixtures
+        run: make build NGINX_DIR="${GITHUB_WORKSPACE}/nginx" NGINX_BUILD_JOBS=2
+
+      - name: Run ApacheBench sweep
+        run: |
+          make bench-ab \
+            NGINX_DIR="${GITHUB_WORKSPACE}/nginx" \
+            BENCH_AB_REQUESTS="${{ inputs.requests }}" \
+            BENCH_AB_CONCURRENCIES="${{ inputs.concurrencies }}" \
+            BENCH_AB_ENDPOINTS="${{ inputs.endpoints }}"
+
+      - name: Publish benchmark summary
+        run: |
+          latest_dir="$(ls -1dt run/bench-ab/benchmarks/* | head -n1)"
+          {
+            echo "## ApacheBench Summary"
+            echo
+            echo '```text'
+            column -t -s $'\t' "${latest_dir}/summary.tsv"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ab-benchmark-results
+          path: run/bench-ab/benchmarks/*
+          if-no-files-found: error
