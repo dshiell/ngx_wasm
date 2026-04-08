@@ -52,6 +52,9 @@ UBSAN_OPTIONS ?= print_stacktrace=1:halt_on_error=1
 FORMAT_FILES = $(sort $(wildcard src/*.c include/*.h))
 HELLO_WORLD_DIR = wasm/hello-world
 FAILURES_DIR = wasm/failures
+LOADTEST_RUN_DIR ?= $(CURDIR)/run/loadtest
+LOADTEST_PORT ?= 18080
+LOADTEST_HOST ?= 127.0.0.1
 
 ifeq ($(BUILD_SANITIZE),1)
 NGINX_CONFIGURE_ARGS = \
@@ -63,7 +66,7 @@ else
 NGINX_CONFIGURE_ARGS = --add-module="$(CURDIR)"
 endif
 
-.PHONY: format check-format wasm deps nginx-build build smoke test test-reload clean
+.PHONY: format check-format wasm deps nginx-build build start stop smoke test test-reload clean
 
 format:
 ifeq ($(strip $(CLANG_FORMAT)),)
@@ -97,6 +100,14 @@ nginx-build:
 	} > "$(NGINX_BUILD_INFO)"
 
 build: wasm nginx-build
+
+start: wasm
+	PORT="$(LOADTEST_PORT)" HOST="$(LOADTEST_HOST)" RUN_DIR="$(LOADTEST_RUN_DIR)" \
+	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/start-loadtest.sh
+
+stop:
+	RUN_DIR="$(LOADTEST_RUN_DIR)" NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" \
+	./scripts/stop-loadtest.sh
 
 smoke:
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/smoke-content-by-wasm.sh

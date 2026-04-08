@@ -112,6 +112,15 @@ Build the example guest:
 make wasm
 ```
 
+Start a simple local nginx instance for load testing:
+
+```sh
+make start
+curl http://127.0.0.1:18080/hello
+curl http://127.0.0.1:18080/health
+make stop
+```
+
 `make wasm` builds all current guest modules required by the example and test
 suite.
 
