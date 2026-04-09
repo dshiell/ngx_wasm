@@ -19,6 +19,7 @@ our @EXPORT_OK = qw(
     req_header_set_yield_wasm
     req_header_set_only_wasm
     req_header_echo_wasm
+    access_auth_gate_wasm
     missing_export_wasm
     missing_memory_wasm
     guest_trap_wasm
@@ -41,43 +42,47 @@ sub wasm_root {
 }
 
 sub hello_world_wasm {
-    return wasm_root() . "/wasm/hello-world/build/hello_world.wasm";
+    return wasm_root() . "/wasm/http-guests/build/hello_world.wasm";
 }
 
 sub fuel_yield_wasm {
-    return wasm_root() . "/wasm/hello-world/src/fuel_yield.wat";
+    return wasm_root() . "/wasm/http-guests/src/fuel_yield.wat";
 }
 
 sub fuel_yield_rust_wasm {
-    return wasm_root() . "/wasm/hello-world/build/fuel_yield_rust.wasm";
+    return wasm_root() . "/wasm/http-guests/build/fuel_yield_rust.wasm";
 }
 
 sub fuel_multi_yield_wasm {
-    return wasm_root() . "/wasm/hello-world/src/fuel_multi_yield.wat";
+    return wasm_root() . "/wasm/http-guests/src/fuel_multi_yield.wat";
 }
 
 sub manual_yield_wasm {
-    return wasm_root() . "/wasm/hello-world/src/manual_yield.wat";
+    return wasm_root() . "/wasm/http-guests/src/manual_yield.wat";
 }
 
 sub multi_yield_wasm {
-    return wasm_root() . "/wasm/hello-world/src/multi_yield.wat";
+    return wasm_root() . "/wasm/http-guests/src/multi_yield.wat";
 }
 
 sub req_header_set_wasm {
-    return wasm_root() . "/wasm/hello-world/src/req_header_set.wat";
+    return wasm_root() . "/wasm/http-guests/src/req_header_set.wat";
 }
 
 sub req_header_set_yield_wasm {
-    return wasm_root() . "/wasm/hello-world/src/req_header_set_yield.wat";
+    return wasm_root() . "/wasm/http-guests/src/req_header_set_yield.wat";
 }
 
 sub req_header_set_only_wasm {
-    return wasm_root() . "/wasm/hello-world/src/req_header_set_only.wat";
+    return wasm_root() . "/wasm/http-guests/src/req_header_set_only.wat";
 }
 
 sub req_header_echo_wasm {
-    return wasm_root() . "/wasm/hello-world/src/req_header_echo.wat";
+    return wasm_root() . "/wasm/http-guests/src/req_header_echo.wat";
+}
+
+sub access_auth_gate_wasm {
+    return wasm_root() . "/wasm/http-guests/build/access_auth_gate.wasm";
 }
 
 sub missing_export_wasm {

@@ -11,8 +11,8 @@ RUN_DIR="${RUN_DIR:-${ROOT_DIR}/run/loadtest}"
 CONF_PATH="${RUN_DIR}/nginx.conf"
 LOG_DIR="${RUN_DIR}/logs"
 PID_FILE="${LOG_DIR}/nginx.pid"
-HELLO_MODULE="${HELLO_MODULE:-${ROOT_DIR}/wasm/hello-world/build/hello_world.wasm}"
-HEALTH_MODULE="${HEALTH_MODULE:-${ROOT_DIR}/wasm/hello-world/build/health.wasm}"
+HELLO_MODULE="${HELLO_MODULE:-${ROOT_DIR}/wasm/http-guests/build/hello_world.wasm}"
+HEALTH_MODULE="${HEALTH_MODULE:-${ROOT_DIR}/wasm/http-guests/build/health.wasm}"
 
 if [ ! -x "${NGINX_BIN}" ]; then
     echo "nginx binary not found: ${NGINX_BIN}" >&2

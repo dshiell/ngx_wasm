@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NGINX_DIR="${NGINX_DIR:-${ROOT_DIR}/../nginx}"
 NGINX_BIN="${NGINX_BIN:-${NGINX_DIR}/objs/nginx}"
-WASM_MODULE="${WASM_MODULE:-${ROOT_DIR}/wasm/hello-world/build/hello_world.wasm}"
+WASM_MODULE="${WASM_MODULE:-${ROOT_DIR}/wasm/http-guests/build/hello_world.wasm}"
 PORT="${PORT:-$((20000 + RANDOM % 10000))}"
 HOST="${HOST:-127.0.0.1}"
 EXPECTED_BODY="${EXPECTED_BODY:-hello from guest wasm}"

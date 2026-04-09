@@ -50,7 +50,7 @@ endif
 UBSAN_OPTIONS ?= print_stacktrace=1:halt_on_error=1
 
 FORMAT_FILES = $(sort $(wildcard src/*.c include/*.h))
-HELLO_WORLD_DIR = wasm/hello-world
+HTTP_GUESTS_DIR = wasm/http-guests
 FAILURES_DIR = wasm/failures
 LOADTEST_RUN_DIR ?= $(CURDIR)/run/loadtest
 LOADTEST_PORT ?= 18080
@@ -88,7 +88,7 @@ endif
 	$(CLANG_FORMAT) --dry-run --Werror $(FORMAT_FILES)
 
 wasm:
-	$(MAKE) -C $(HELLO_WORLD_DIR) RUSTC="$(RUSTC)" RUSTUP="$(RUSTUP)" WASM_TARGET="$(WASM_TARGET)" build
+	$(MAKE) -C $(HTTP_GUESTS_DIR) RUSTC="$(RUSTC)" RUSTUP="$(RUSTUP)" WASM_TARGET="$(WASM_TARGET)" build
 	$(MAKE) -C $(FAILURES_DIR) RUSTC="$(RUSTC)" RUSTUP="$(RUSTUP)" WASM_TARGET="$(WASM_TARGET)" build
 
 deps:
@@ -135,7 +135,7 @@ test-reload: wasm
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
 
 clean:
-	$(MAKE) -C $(HELLO_WORLD_DIR) clean
+	$(MAKE) -C $(HTTP_GUESTS_DIR) clean
 	$(MAKE) -C $(FAILURES_DIR) clean
 	rm -f "$(NGINX_BUILD_INFO)"
 	rm -rf t/servroot* run
