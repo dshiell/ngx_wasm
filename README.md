@@ -158,11 +158,11 @@ http {
         listen 8080;
 
         location /rewrite {
-            rewrite_by_wasm wasm/hello-world/build/hello_world.wasm on_content;
+            rewrite_by_wasm wasm/http-guests/build/hello_world.wasm on_content;
         }
 
         location /wasm {
-            content_by_wasm wasm/hello-world/build/hello_world.wasm on_content;
+            content_by_wasm wasm/http-guests/build/hello_world.wasm on_content;
         }
     }
 }
@@ -177,7 +177,7 @@ Current expected behavior:
 ## Example Guest Build
 
 The low-level example guest lives in
-[`wasm/hello-world`](/Users/derek/projects/nginx-playground/ngx_wasm/wasm/hello-world).
+[`wasm/http-guests`](/Users/derek/projects/nginx-playground/ngx_wasm/wasm/http-guests).
 
 Build it with:
 
