@@ -595,8 +595,7 @@ static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
 
     if (ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_REWRITE &&
         !ctx->exec.abi.status_set && !ctx->exec.abi.body_set &&
-        !ctx->exec.abi.content_type_set)
-    {
+        !ctx->exec.abi.content_type_set) {
         ngx_http_set_ctx(r, NULL, ngx_http_wasm_module);
         return NGX_DECLINED;
     }

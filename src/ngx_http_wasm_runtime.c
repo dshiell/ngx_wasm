@@ -107,11 +107,8 @@ static wasm_trap_t *ngx_http_wasm_runtime_get_memory(wasmtime_caller_t *caller,
                                                      uint32_t ptr,
                                                      uint32_t len,
                                                      const u_char **data);
-static wasm_trap_t *
-ngx_http_wasm_runtime_get_memory_mut(wasmtime_caller_t *caller,
-                                     uint32_t ptr,
-                                     uint32_t len,
-                                     u_char **data);
+static wasm_trap_t *ngx_http_wasm_runtime_get_memory_mut(
+    wasmtime_caller_t *caller, uint32_t ptr, uint32_t len, u_char **data);
 static wasm_trap_t *ngx_http_wasm_runtime_bad_signature(const char *name);
 static wasm_trap_t *ngx_http_wasm_host_log(void *env,
                                            wasmtime_caller_t *caller,
@@ -788,11 +785,8 @@ static wasm_trap_t *ngx_http_wasm_runtime_get_memory(wasmtime_caller_t *caller,
     return NULL;
 }
 
-static wasm_trap_t *
-ngx_http_wasm_runtime_get_memory_mut(wasmtime_caller_t *caller,
-                                     uint32_t ptr,
-                                     uint32_t len,
-                                     u_char **data) {
+static wasm_trap_t *ngx_http_wasm_runtime_get_memory_mut(
+    wasmtime_caller_t *caller, uint32_t ptr, uint32_t len, u_char **data) {
     const u_char *ro_data;
     wasm_trap_t *trap;
 
