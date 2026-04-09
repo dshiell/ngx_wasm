@@ -11,6 +11,7 @@ typedef struct {
 
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r);
+static ngx_int_t ngx_http_wasm_access_handler(ngx_http_request_t *r);
 static void ngx_http_wasm_resume_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
                                            ngx_http_wasm_ctx_t *ctx);
@@ -32,6 +33,8 @@ static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_access_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
@@ -64,6 +67,14 @@ static ngx_command_t ngx_http_wasm_commands[] = {
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
          NGX_CONF_TAKE2,
      ngx_http_wasm_rewrite_by,
+     NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("access_by_wasm"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
+         NGX_CONF_TAKE2,
+     ngx_http_wasm_access_by,
      NGX_HTTP_LOC_CONF_OFFSET,
      0,
      NULL},
@@ -124,6 +135,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
 
     conf->content.set = NGX_CONF_UNSET;
     conf->rewrite.set = NGX_CONF_UNSET;
+    conf->access.set = NGX_CONF_UNSET;
     conf->fuel_limit = NGX_CONF_UNSET_UINT;
     conf->timeslice_fuel = NGX_CONF_UNSET_UINT;
 
@@ -144,6 +156,7 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
 
     ngx_http_wasm_merge_phase_conf(&parent->content, &child->content);
     ngx_http_wasm_merge_phase_conf(&parent->rewrite, &child->rewrite);
+    ngx_http_wasm_merge_phase_conf(&parent->access, &child->access);
 
     return NGX_CONF_OK;
 }
@@ -263,6 +276,13 @@ static ngx_int_t ngx_http_wasm_postconfiguration(ngx_conf_t *cf) {
 
     *h = ngx_http_wasm_rewrite_handler;
 
+    h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+
+    *h = ngx_http_wasm_access_handler;
+
     return NGX_OK;
 }
 
@@ -357,6 +377,23 @@ ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 }
 
 static char *
+ngx_http_wasm_access_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+
+    (void)cmd;
+    wcf = conf;
+
+    switch (ngx_http_wasm_configure_phase(cf, &wcf->access)) {
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
+}
+
+static char *
 ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_http_wasm_conf_t *wcf;
     ngx_str_t *value;
@@ -428,6 +465,33 @@ static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r) {
     }
 
     return ngx_http_wasm_run_phase(r, &wcf->rewrite, &phase_name);
+}
+
+static ngx_int_t ngx_http_wasm_access_handler(ngx_http_request_t *r) {
+    static ngx_str_t phase_name = ngx_string("access");
+    ngx_http_wasm_conf_t *wcf;
+    ngx_http_wasm_ctx_t *ctx;
+    ngx_int_t rc;
+
+    wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
+    if (wcf == NULL || wcf->access.set != 1) {
+        return NGX_DECLINED;
+    }
+
+    rc = ngx_http_wasm_run_phase(r, &wcf->access, &phase_name);
+    if (rc == NGX_DONE || rc == NGX_DECLINED) {
+        return rc;
+    }
+
+    ctx = ngx_http_get_module_ctx(r, ngx_http_wasm_module);
+    if (ctx != NULL && ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_ACCESS &&
+        ctx->exec.abi.response_sent) {
+        r->write_event_handler = ngx_http_request_empty_handler;
+        ngx_http_finalize_request(r, rc);
+        return NGX_DONE;
+    }
+
+    return rc;
 }
 
 static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
@@ -530,6 +594,18 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
         return ctx;
     }
 
+    if (phase == &wcf->access && wcf->access.set == 1) {
+        ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec,
+                                            r,
+                                            &wcf->access,
+                                            NGX_HTTP_WASM_PHASE_ACCESS,
+                                            wmcf->runtime);
+        ctx->exec.fuel_limit = wcf->fuel_limit;
+        ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
+        ctx->exec.fuel_remaining = wcf->fuel_limit;
+        return ctx;
+    }
+
     return NULL;
 }
 
@@ -556,6 +632,13 @@ static void ngx_http_wasm_resume_handler(ngx_http_request_t *r) {
     if (rc == NGX_DECLINED) {
         r->write_event_handler = ngx_http_core_run_phases;
         ngx_http_core_run_phases(r);
+        return;
+    }
+
+    if (ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_ACCESS &&
+        ctx->exec.abi.response_sent) {
+        r->write_event_handler = ngx_http_request_empty_handler;
+        ngx_http_finalize_request(r, rc);
         return;
     }
 
@@ -594,6 +677,13 @@ static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
     ctx->waiting = 0;
 
     if (ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_REWRITE &&
+        !ctx->exec.abi.status_set && !ctx->exec.abi.body_set &&
+        !ctx->exec.abi.content_type_set) {
+        ngx_http_set_ctx(r, NULL, ngx_http_wasm_module);
+        return NGX_DECLINED;
+    }
+
+    if (ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_ACCESS &&
         !ctx->exec.abi.status_set && !ctx->exec.abi.body_set &&
         !ctx->exec.abi.content_type_set) {
         ngx_http_set_ctx(r, NULL, ngx_http_wasm_module);

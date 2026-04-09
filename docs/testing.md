@@ -137,3 +137,9 @@ Recommended implementation-order tests for async conversion:
 - then enable fuel async yield interval and prove a single timeslice yield
 - then add repeated timeslice yields
 - only after that convert manual yield to the same async polling path
+
+Current phase coverage:
+
+- `t/003-rewrite-basic.t`
+- `t/004-request-headers.t`
+- `t/005-access-basic.t`
