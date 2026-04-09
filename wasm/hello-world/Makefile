@@ -7,7 +7,8 @@ OUT_DIR ?= build
 TARGETS = \
 	$(OUT_DIR)/hello_world.wasm \
 	$(OUT_DIR)/health.wasm \
-	$(OUT_DIR)/fuel_yield_rust.wasm
+	$(OUT_DIR)/fuel_yield_rust.wasm \
+	$(OUT_DIR)/access_auth_gate.wasm
 
 .PHONY: build clean check-toolchain
 
@@ -46,6 +47,11 @@ $(OUT_DIR)/health.wasm: src/health.rs
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
 
 $(OUT_DIR)/fuel_yield_rust.wasm: src/fuel_yield.rs
+	mkdir -p $(OUT_DIR)
+	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
+		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
+
+$(OUT_DIR)/access_auth_gate.wasm: src/access_auth_gate.rs
 	mkdir -p $(OUT_DIR)
 	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<

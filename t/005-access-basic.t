@@ -100,3 +100,35 @@ GET /access-to-content
 --- error_code: 200
 --- response_body
 set-by-guest
+
+
+=== TEST 7: access_by_wasm can deny unauthorized requests with 403
+--- config eval
+qq{
+    location /auth-deny {
+        access_by_wasm @{[ TestWasm::access_auth_gate_wasm() ]} on_content;
+        content_by_wasm @{[ TestWasm::nonzero_return_wasm() ]} on_content;
+    }
+}
+--- request
+GET /auth-deny
+--- error_code: 403
+--- response_body
+forbidden
+
+
+=== TEST 8: access_by_wasm can allow authorized requests to reach content
+--- config eval
+qq{
+    location /auth-allow {
+        access_by_wasm @{[ TestWasm::access_auth_gate_wasm() ]} on_content;
+        content_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
+    }
+}
+--- more_headers
+X-Auth: allow
+--- request
+GET /auth-allow
+--- error_code: 200
+--- response_body
+hello from guest wasm
