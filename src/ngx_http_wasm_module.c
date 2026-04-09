@@ -20,7 +20,8 @@ static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
 static ngx_http_wasm_ctx_t *
 ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
                                 ngx_http_wasm_conf_t *wcf,
-                                ngx_http_wasm_main_conf_t *wmcf);
+                                ngx_http_wasm_main_conf_t *wmcf,
+                                ngx_http_wasm_phase_conf_t *phase);
 static ngx_int_t ngx_http_wasm_configure_phase(ngx_conf_t *cf,
                                                ngx_http_wasm_phase_conf_t *dst);
 static void ngx_http_wasm_merge_phase_conf(ngx_http_wasm_phase_conf_t *parent,
@@ -460,7 +461,7 @@ static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
     }
 
     wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
-    ctx = ngx_http_wasm_get_or_create_ctx(r, wcf, wmcf);
+    ctx = ngx_http_wasm_get_or_create_ctx(r, wcf, wmcf, phase);
     if (ctx == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
@@ -480,7 +481,8 @@ static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
 static ngx_http_wasm_ctx_t *
 ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
                                 ngx_http_wasm_conf_t *wcf,
-                                ngx_http_wasm_main_conf_t *wmcf) {
+                                ngx_http_wasm_main_conf_t *wmcf,
+                                ngx_http_wasm_phase_conf_t *phase) {
     ngx_pool_cleanup_t *cln;
     ngx_http_wasm_ctx_t *ctx;
 
@@ -504,7 +506,7 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
     cln->handler = ngx_http_wasm_cleanup_ctx;
     cln->data = &ctx->exec;
 
-    if (wcf->rewrite.set == 1) {
+    if (phase == &wcf->rewrite && wcf->rewrite.set == 1) {
         ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec,
                                             r,
                                             &wcf->rewrite,
@@ -516,7 +518,7 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
         return ctx;
     }
 
-    if (wcf->content.set == 1) {
+    if (phase == &wcf->content && wcf->content.set == 1) {
         ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec,
                                             r,
                                             &wcf->content,
@@ -548,6 +550,12 @@ static void ngx_http_wasm_resume_handler(ngx_http_request_t *r) {
 
     rc = ngx_http_wasm_run_request(r, ctx);
     if (rc == NGX_DONE) {
+        return;
+    }
+
+    if (rc == NGX_DECLINED) {
+        r->write_event_handler = ngx_http_core_run_phases;
+        ngx_http_core_run_phases(r);
         return;
     }
 
@@ -584,6 +592,14 @@ static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
     }
 
     ctx->waiting = 0;
+
+    if (ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_REWRITE &&
+        !ctx->exec.abi.status_set && !ctx->exec.abi.body_set &&
+        !ctx->exec.abi.content_type_set)
+    {
+        ngx_http_set_ctx(r, NULL, ngx_http_wasm_module);
+        return NGX_DECLINED;
+    }
 
     rc = ngx_http_wasm_abi_send_response(&ctx->exec.abi);
     if (rc == NGX_ERROR) {

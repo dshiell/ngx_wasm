@@ -161,6 +161,33 @@ ngx_int_t ngx_http_wasm_abi_req_set_header(ngx_http_wasm_abi_ctx_t *ctx,
     return NGX_HTTP_WASM_OK;
 }
 
+ngx_int_t ngx_http_wasm_abi_req_get_header(ngx_http_wasm_abi_ctx_t *ctx,
+                                           const u_char *name,
+                                           size_t name_len,
+                                           u_char *buf,
+                                           size_t buf_len) {
+    ngx_http_request_t *r;
+    ngx_table_elt_t *h;
+    size_t copy_len;
+
+    if (name_len == 0) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    r = ctx->request;
+    h = ngx_http_wasm_abi_find_header(r, name, name_len);
+    if (h == NULL) {
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    copy_len = ngx_min(h->value.len, buf_len);
+    if (copy_len != 0) {
+        ngx_memcpy(buf, h->value.data, copy_len);
+    }
+
+    return (ngx_int_t)h->value.len;
+}
+
 ngx_int_t ngx_http_wasm_abi_resp_set_content_type(ngx_http_wasm_abi_ctx_t *ctx,
                                                   const u_char *data,
                                                   size_t len,

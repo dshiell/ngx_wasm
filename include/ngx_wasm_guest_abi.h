@@ -8,7 +8,8 @@ extern "C" {
 #define NGX_WASM_ABI_VERSION 1
 
 #define NGX_WASM_OK 0
-#define NGX_WASM_ERROR -1
+#define NGX_WASM_NOT_FOUND -1
+#define NGX_WASM_ERROR -2
 
 #define NGX_WASM_LOG_STDERR 0
 #define NGX_WASM_LOG_EMERG 1
@@ -32,6 +33,10 @@ int ngx_wasm_req_set_header(const void *name_ptr,
                             int name_len,
                             const void *value_ptr,
                             int value_len);
+int ngx_wasm_req_get_header(const void *name_ptr,
+                            int name_len,
+                            void *buf_ptr,
+                            int buf_len);
 int ngx_wasm_resp_write(const void *ptr, int len);
 int ngx_wasm_yield(void);
 

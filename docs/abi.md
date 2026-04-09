@@ -50,6 +50,8 @@ int ngx_wasm_log(int level, const void *ptr, int len);
 int ngx_wasm_resp_set_status(int status);
 int ngx_wasm_req_set_header(const void *name_ptr, int name_len,
                             const void *value_ptr, int value_len);
+int ngx_wasm_req_get_header(const void *name_ptr, int name_len,
+                            void *buf_ptr, int buf_len);
 int ngx_wasm_resp_write(const void *ptr, int len);
 ```
 
@@ -68,6 +70,16 @@ Expected semantics:
   - currently intended for request metadata mutation rather than full
     re-parsing of special core headers
   - returns `0` on success
+
+- `ngx_wasm_req_get_header`
+  - looks up a request header by case-insensitive name from current request
+    state
+  - copies up to `buf_len` bytes of the header value into guest memory at
+    `buf_ptr`
+  - returns the full header value length on success, even if truncated by the
+    provided buffer
+  - returns `-1` when the header is missing
+  - returns `-2` on invalid arguments or host-side failure
 
 - `ngx_wasm_resp_write`
   - writes the response body from guest linear memory
@@ -94,7 +106,9 @@ Current conventions:
 - guest export returns `0` on success
 - non-zero guest return values are treated as execution failure
 - host import functions return `0` on success
-- negative/error returns are reserved for host-side failures
+- `ngx_wasm_req_get_header` returns a non-negative length on success
+- `ngx_wasm_req_get_header` returns `-1` for missing headers
+- negative/error returns are otherwise reserved for host-side failures
 
 ## Minimal C Guest Example
 

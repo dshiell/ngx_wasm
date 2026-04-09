@@ -86,15 +86,14 @@ header set after yield
 --- config eval
 qq{
     location /rewrite-to-content {
-        add_header X-Wasm-Test \$http_x_wasm_test always;
-        rewrite_by_wasm @{[ TestWasm::req_header_set_wasm() ]} on_content;
-        content_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
+        rewrite_by_wasm @{[ TestWasm::req_header_set_only_wasm() ]} on_content;
+        content_by_wasm @{[ TestWasm::req_header_echo_wasm() ]} on_content;
     }
 }
 --- request
 GET /rewrite-to-content
 --- error_code: 200
 --- response_headers
-X-Wasm-Test: set-by-guest
+Content-Type: text/plain
 --- response_body
-header set
+set-by-guest

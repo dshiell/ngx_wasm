@@ -17,6 +17,8 @@ our @EXPORT_OK = qw(
     multi_yield_wasm
     req_header_set_wasm
     req_header_set_yield_wasm
+    req_header_set_only_wasm
+    req_header_echo_wasm
     missing_export_wasm
     missing_memory_wasm
     guest_trap_wasm
@@ -68,6 +70,14 @@ sub req_header_set_wasm {
 
 sub req_header_set_yield_wasm {
     return wasm_root() . "/wasm/hello-world/src/req_header_set_yield.wat";
+}
+
+sub req_header_set_only_wasm {
+    return wasm_root() . "/wasm/hello-world/src/req_header_set_only.wat";
+}
+
+sub req_header_echo_wasm {
+    return wasm_root() . "/wasm/hello-world/src/req_header_echo.wat";
 }
 
 sub missing_export_wasm {

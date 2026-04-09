@@ -8,7 +8,8 @@
 #define NGX_HTTP_WASM_ABI_VERSION 1
 
 #define NGX_HTTP_WASM_OK 0
-#define NGX_HTTP_WASM_ERROR -1
+#define NGX_HTTP_WASM_NOT_FOUND -1
+#define NGX_HTTP_WASM_ERROR -2
 
 #define NGX_HTTP_WASM_LOG_STDERR NGX_LOG_STDERR
 #define NGX_HTTP_WASM_LOG_EMERG NGX_LOG_EMERG
@@ -46,6 +47,11 @@ ngx_int_t ngx_http_wasm_abi_req_set_header(ngx_http_wasm_abi_ctx_t *ctx,
                                            size_t name_len,
                                            const u_char *value,
                                            size_t value_len);
+ngx_int_t ngx_http_wasm_abi_req_get_header(ngx_http_wasm_abi_ctx_t *ctx,
+                                           const u_char *name,
+                                           size_t name_len,
+                                           u_char *buf,
+                                           size_t buf_len);
 ngx_int_t ngx_http_wasm_abi_resp_set_content_type(ngx_http_wasm_abi_ctx_t *ctx,
                                                   const u_char *data,
                                                   size_t len,
