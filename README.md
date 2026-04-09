@@ -4,7 +4,7 @@
 WebAssembly.
 
 The current focus is an OpenResty-style programming model for standard,
-unmodified NGINX, starting with `content_by_wasm`.
+unmodified NGINX, starting with `content_by_wasm` and `rewrite_by_wasm`.
 
 Project references:
 
@@ -17,6 +17,7 @@ Project references:
 Today, `ngx_wasm` provides an initial vertical slice of:
 
 - `content_by_wasm <module-path> <export>`
+- `rewrite_by_wasm <module-path> <export>`
 - OpenResty-style configuration placement in `http`, `server`, and `location`
 - Wasmtime C API embedding as the current WebAssembly runtime
 - one guest export invocation per request
@@ -156,6 +157,10 @@ http {
     server {
         listen 8080;
 
+        location /rewrite {
+            rewrite_by_wasm wasm/hello-world/build/hello_world.wasm on_content;
+        }
+
         location /wasm {
             content_by_wasm wasm/hello-world/build/hello_world.wasm on_content;
         }
@@ -165,7 +170,7 @@ http {
 
 Current expected behavior:
 
-- the request hits the `ngx_wasm` content handler
+- the request hits the configured `ngx_wasm` rewrite or content handler
 - the guest export `on_content` is invoked
 - the guest writes the response via the host ABI
 
@@ -206,6 +211,7 @@ guest fixtures.
 - Design notes: [design.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/design.md)
 - Testing plan: [testing.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/testing.md)
 - Guest ABI: [abi.md](/Users/derek/projects/nginx-playground/ngx_wasm/docs/abi.md)
+- Guest ABI header: [ngx_wasm_guest_abi.h](/Users/derek/projects/nginx-playground/ngx_wasm/include/ngx_wasm_guest_abi.h)
 
 ## Status
 

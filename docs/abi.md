@@ -15,6 +15,7 @@ Status: early and intentionally narrow. Expect changes as the module evolves.
 Current Phase 1 execution model:
 
 - one guest export is invoked for `content_by_wasm`
+- one guest export is invoked for `rewrite_by_wasm`
 - one request-local invocation per request
 - guest code runs inside a fresh Wasmtime store per invocation
 - host state is request-local
@@ -31,6 +32,10 @@ int on_content(void);
 Current nginx configuration shape:
 
 ```nginx
+location /rewrite {
+    rewrite_by_wasm /path/to/module.wasm on_content;
+}
+
 location /wasm {
     content_by_wasm /path/to/module.wasm on_content;
 }
@@ -43,6 +48,10 @@ Current planned/imported host functions:
 ```c
 int ngx_wasm_log(int level, const void *ptr, int len);
 int ngx_wasm_resp_set_status(int status);
+int ngx_wasm_req_set_header(const void *name_ptr, int name_len,
+                            const void *value_ptr, int value_len);
+int ngx_wasm_req_get_header(const void *name_ptr, int name_len,
+                            void *buf_ptr, int buf_len);
 int ngx_wasm_resp_write(const void *ptr, int len);
 ```
 
@@ -55,6 +64,22 @@ Expected semantics:
 - `ngx_wasm_resp_set_status`
   - sets the HTTP response status code
   - returns `0` on success
+
+- `ngx_wasm_req_set_header`
+  - sets or replaces a request header visible to later nginx processing
+  - currently intended for request metadata mutation rather than full
+    re-parsing of special core headers
+  - returns `0` on success
+
+- `ngx_wasm_req_get_header`
+  - looks up a request header by case-insensitive name from current request
+    state
+  - copies up to `buf_len` bytes of the header value into guest memory at
+    `buf_ptr`
+  - returns the full header value length on success, even if truncated by the
+    provided buffer
+  - returns `-1` when the header is missing
+  - returns `-2` on invalid arguments or host-side failure
 
 - `ngx_wasm_resp_write`
   - writes the response body from guest linear memory
@@ -81,23 +106,21 @@ Current conventions:
 - guest export returns `0` on success
 - non-zero guest return values are treated as execution failure
 - host import functions return `0` on success
-- negative/error returns are reserved for host-side failures
+- `ngx_wasm_req_get_header` returns a non-negative length on success
+- `ngx_wasm_req_get_header` returns `-1` for missing headers
+- negative/error returns are otherwise reserved for host-side failures
 
 ## Minimal C Guest Example
 
 ```c
-extern int ngx_wasm_log(int level, const char *ptr, int len);
-extern int ngx_wasm_resp_set_status(int status);
-extern int ngx_wasm_resp_write(const char *ptr, int len);
+#include <ngx_wasm_guest_abi.h>
 
-#define NGX_HTTP_WASM_LOG_NOTICE 6
-
-__attribute__((export_name("on_content")))
+NGX_WASM_EXPORT("on_content")
 int on_content(void) {
     static const char log_message[] = "hello-world guest invoked";
     static const char body[] = "hello from guest wasm\n";
 
-    ngx_wasm_log(NGX_HTTP_WASM_LOG_NOTICE, log_message, sizeof(log_message) - 1);
+    ngx_wasm_log(NGX_WASM_LOG_NOTICE, log_message, sizeof(log_message) - 1);
     ngx_wasm_resp_set_status(200);
     ngx_wasm_resp_write(body, sizeof(body) - 1);
 

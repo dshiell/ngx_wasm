@@ -13,6 +13,7 @@
 typedef struct ngx_http_wasm_cached_module_s ngx_http_wasm_cached_module_t;
 typedef struct ngx_http_wasm_runtime_state_s ngx_http_wasm_runtime_state_t;
 typedef struct ngx_http_wasm_resume_state_s ngx_http_wasm_resume_state_t;
+typedef struct ngx_http_wasm_phase_conf_s ngx_http_wasm_phase_conf_t;
 
 typedef enum {
     NGX_HTTP_WASM_EXEC_READY = 0,
@@ -28,23 +29,33 @@ typedef enum {
     NGX_HTTP_WASM_SUSPEND_WAIT_IO,
 } ngx_http_wasm_suspend_kind_e;
 
+typedef enum {
+    NGX_HTTP_WASM_PHASE_CONTENT = 0,
+    NGX_HTTP_WASM_PHASE_REWRITE,
+} ngx_http_wasm_phase_e;
+
+struct ngx_http_wasm_phase_conf_s {
+    ngx_flag_t set;
+    ngx_http_wasm_cached_module_t *module;
+    ngx_str_t module_path;
+    ngx_str_t export_name;
+};
+
 typedef struct {
     ngx_array_t *modules;
     ngx_http_wasm_runtime_state_t *runtime;
 } ngx_http_wasm_main_conf_t;
 
 typedef struct {
-    ngx_flag_t set;
     ngx_uint_t fuel_limit;
     ngx_uint_t timeslice_fuel;
-    ngx_http_wasm_cached_module_t *module;
-    ngx_str_t module_path;
-    ngx_str_t export_name;
+    ngx_http_wasm_phase_conf_t content;
+    ngx_http_wasm_phase_conf_t rewrite;
 } ngx_http_wasm_conf_t;
 
 typedef struct {
     ngx_http_request_t *request;
-    ngx_http_wasm_conf_t *conf;
+    ngx_http_wasm_phase_conf_t *conf;
     ngx_http_wasm_runtime_state_t *runtime;
     ngx_http_wasm_abi_ctx_t abi;
     uint64_t fuel_limit;
@@ -52,6 +63,7 @@ typedef struct {
     uint64_t fuel_remaining;
     ngx_http_wasm_exec_state_e state;
     ngx_http_wasm_suspend_kind_e suspend_kind;
+    ngx_http_wasm_phase_e phase_kind;
     /*
      * Request-pool-owned resumable Wasmtime state. This keeps the store and
      * every store-owned handle alive across nginx reposts until request pool
@@ -69,7 +81,8 @@ void ngx_http_wasm_runtime_destroy(ngx_http_wasm_main_conf_t *wmcf);
 void ngx_http_wasm_runtime_init_exec_ctx(
     ngx_http_wasm_exec_ctx_t *ctx,
     ngx_http_request_t *r,
-    ngx_http_wasm_conf_t *conf,
+    ngx_http_wasm_phase_conf_t *conf,
+    ngx_http_wasm_phase_e phase_kind,
     ngx_http_wasm_runtime_state_t *runtime);
 void ngx_http_wasm_runtime_cleanup_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx);
 ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx);
