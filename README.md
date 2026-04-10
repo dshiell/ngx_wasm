@@ -4,7 +4,8 @@
 WebAssembly.
 
 The current focus is an OpenResty-style programming model for standard,
-unmodified NGINX, starting with `content_by_wasm` and `rewrite_by_wasm`.
+unmodified NGINX, starting with `content_by_wasm`, `server_rewrite_by_wasm`,
+and `rewrite_by_wasm`.
 
 Project references:
 
@@ -17,6 +18,7 @@ Project references:
 Today, `ngx_wasm` provides an initial vertical slice of:
 
 - `content_by_wasm <module-path> <export>`
+- `server_rewrite_by_wasm <module-path> <export>`
 - `rewrite_by_wasm <module-path> <export>`
 - OpenResty-style configuration placement in `http`, `server`, and `location`
 - Wasmtime C API embedding as the current WebAssembly runtime
@@ -157,6 +159,8 @@ http {
     server {
         listen 8080;
 
+        server_rewrite_by_wasm wasm/http-guests/build/hello_world.wasm on_content;
+
         location /rewrite {
             rewrite_by_wasm wasm/http-guests/build/hello_world.wasm on_content;
         }
@@ -170,7 +174,8 @@ http {
 
 Current expected behavior:
 
-- the request hits the configured `ngx_wasm` rewrite or content handler
+- the request hits the configured `ngx_wasm` server rewrite, rewrite, or
+  content handler
 - the guest export `on_content` is invoked
 - the guest writes the response via the host ABI
 

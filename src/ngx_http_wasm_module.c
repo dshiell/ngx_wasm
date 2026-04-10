@@ -10,11 +10,13 @@ typedef struct {
 } ngx_http_wasm_ctx_t;
 
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
+static ngx_int_t ngx_http_wasm_server_rewrite_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r);
 static void ngx_http_wasm_resume_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
                                            ngx_http_wasm_ctx_t *ctx);
 static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
+                                         ngx_http_wasm_conf_t *wcf,
                                          ngx_http_wasm_phase_conf_t *phase,
                                          ngx_str_t *phase_name);
 static ngx_http_wasm_ctx_t *
@@ -30,6 +32,8 @@ static void ngx_http_wasm_cleanup_ctx(void *data);
 static void ngx_http_wasm_cleanup_main_conf(void *data);
 static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_server_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
@@ -65,6 +69,13 @@ static ngx_command_t ngx_http_wasm_commands[] = {
          NGX_CONF_TAKE2,
      ngx_http_wasm_rewrite_by,
      NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("server_rewrite_by_wasm"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_CONF_TAKE2,
+     ngx_http_wasm_server_rewrite_by,
+     NGX_HTTP_SRV_CONF_OFFSET,
      0,
      NULL},
 
@@ -124,6 +135,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
 
     conf->content.set = NGX_CONF_UNSET;
     conf->rewrite.set = NGX_CONF_UNSET;
+    conf->server_rewrite.set = NGX_CONF_UNSET;
     conf->fuel_limit = NGX_CONF_UNSET_UINT;
     conf->timeslice_fuel = NGX_CONF_UNSET_UINT;
 
@@ -144,6 +156,8 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
 
     ngx_http_wasm_merge_phase_conf(&parent->content, &child->content);
     ngx_http_wasm_merge_phase_conf(&parent->rewrite, &child->rewrite);
+    ngx_http_wasm_merge_phase_conf(&parent->server_rewrite,
+                                   &child->server_rewrite);
 
     return NGX_CONF_OK;
 }
@@ -256,6 +270,13 @@ static ngx_int_t ngx_http_wasm_postconfiguration(ngx_conf_t *cf) {
 
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
 
+    h = ngx_array_push(&cmcf->phases[NGX_HTTP_SERVER_REWRITE_PHASE].handlers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+
+    *h = ngx_http_wasm_server_rewrite_handler;
+
     h = ngx_array_push(&cmcf->phases[NGX_HTTP_REWRITE_PHASE].handlers);
     if (h == NULL) {
         return NGX_ERROR;
@@ -330,6 +351,24 @@ ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     wcf = conf;
 
     switch (ngx_http_wasm_configure_phase(cf, &wcf->content)) {
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
+}
+
+static char *ngx_http_wasm_server_rewrite_by(ngx_conf_t *cf,
+                                             ngx_command_t *cmd,
+                                             void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+
+    (void)cmd;
+    wcf = conf;
+
+    switch (ngx_http_wasm_configure_phase(cf, &wcf->server_rewrite)) {
         case NGX_OK:
             return NGX_CONF_OK;
         case NGX_DECLINED:
@@ -415,7 +454,19 @@ static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
         return NGX_DECLINED;
     }
 
-    return ngx_http_wasm_run_phase(r, &wcf->content, &phase_name);
+    return ngx_http_wasm_run_phase(r, wcf, &wcf->content, &phase_name);
+}
+
+static ngx_int_t ngx_http_wasm_server_rewrite_handler(ngx_http_request_t *r) {
+    static ngx_str_t phase_name = ngx_string("server rewrite");
+    ngx_http_wasm_conf_t *wcf;
+
+    wcf = ngx_http_get_module_srv_conf(r, ngx_http_wasm_module);
+    if (wcf == NULL || wcf->server_rewrite.set != 1) {
+        return NGX_DECLINED;
+    }
+
+    return ngx_http_wasm_run_phase(r, wcf, &wcf->server_rewrite, &phase_name);
 }
 
 static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r) {
@@ -427,14 +478,14 @@ static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r) {
         return NGX_DECLINED;
     }
 
-    return ngx_http_wasm_run_phase(r, &wcf->rewrite, &phase_name);
+    return ngx_http_wasm_run_phase(r, wcf, &wcf->rewrite, &phase_name);
 }
 
 static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
+                                         ngx_http_wasm_conf_t *wcf,
                                          ngx_http_wasm_phase_conf_t *phase,
                                          ngx_str_t *phase_name) {
     ngx_http_wasm_ctx_t *ctx;
-    ngx_http_wasm_conf_t *wcf;
     ngx_http_wasm_main_conf_t *wmcf;
     ngx_int_t rc;
 
@@ -460,7 +511,6 @@ static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
         return rc;
     }
 
-    wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
     ctx = ngx_http_wasm_get_or_create_ctx(r, wcf, wmcf, phase);
     if (ctx == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -511,6 +561,18 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
                                             r,
                                             &wcf->rewrite,
                                             NGX_HTTP_WASM_PHASE_REWRITE,
+                                            wmcf->runtime);
+        ctx->exec.fuel_limit = wcf->fuel_limit;
+        ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
+        ctx->exec.fuel_remaining = wcf->fuel_limit;
+        return ctx;
+    }
+
+    if (phase == &wcf->server_rewrite && wcf->server_rewrite.set == 1) {
+        ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec,
+                                            r,
+                                            &wcf->server_rewrite,
+                                            NGX_HTTP_WASM_PHASE_SERVER_REWRITE,
                                             wmcf->runtime);
         ctx->exec.fuel_limit = wcf->fuel_limit;
         ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
@@ -593,7 +655,8 @@ static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
 
     ctx->waiting = 0;
 
-    if (ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_REWRITE &&
+    if ((ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_REWRITE ||
+         ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_SERVER_REWRITE) &&
         !ctx->exec.abi.status_set && !ctx->exec.abi.body_set &&
         !ctx->exec.abi.content_type_set) {
         ngx_http_set_ctx(r, NULL, ngx_http_wasm_module);
