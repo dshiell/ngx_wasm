@@ -62,11 +62,18 @@ Current staged plan:
    - bad module path
 
 3. Later phase-specific suites
+   - server rewrite
    - rewrite
    - access
    - subrequests
    - async fuel/yield behavior
    - reload while requests are suspended
+
+4. `t/005-server-rewrite-basic.t`
+   - successful `server_rewrite_by_wasm`
+   - inheritance from `http` and `server` scope
+   - yield/resume before later phases
+   - fallthrough to later phases when no response is produced
 
 Testing principles:
 
