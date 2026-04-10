@@ -77,3 +77,20 @@ GET /fallthrough
 Content-Type: text/plain
 --- response_body
 set-by-guest
+
+
+=== TEST 5: server_rewrite_by_wasm accepts POST requests
+--- config eval
+qq{
+    server_rewrite_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
+
+    location /post {
+        content_by_wasm @{[ TestWasm::nonzero_return_wasm() ]} on_content;
+    }
+}
+--- request
+POST /post
+hello request body
+--- error_code: 200
+--- response_body
+hello from guest wasm

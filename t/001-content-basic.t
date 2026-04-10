@@ -6,7 +6,7 @@ use TestWasm ();
 use Test::Nginx::Socket -Base;
 
 repeat_each(1);
-plan tests => repeat_each() * 28;
+plan tests => repeat_each() * 30;
 
 our $HttpConfig = '';
 
@@ -201,3 +201,18 @@ qq{
     "hello after two yields\n",
     "hello from guest wasm\n",
 ]
+
+
+=== TEST 11: content_by_wasm accepts POST requests
+--- config eval
+qq{
+    location /wasm {
+        content_by_wasm @{[ TestWasm::hello_world_wasm() ]} on_content;
+    }
+}
+--- request
+POST /wasm
+hello request body
+--- error_code: 200
+--- response_body
+hello from guest wasm

@@ -502,10 +502,6 @@ static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
                   &phase->module_path,
                   &phase->export_name);
 
-    if (!(r->method & (NGX_HTTP_GET | NGX_HTTP_HEAD))) {
-        return NGX_HTTP_NOT_ALLOWED;
-    }
-
     rc = ngx_http_discard_request_body(r);
     if (rc != NGX_OK) {
         return rc;
