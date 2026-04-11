@@ -19,6 +19,7 @@ our @EXPORT_OK = qw(
     req_header_set_yield_wasm
     req_header_set_only_wasm
     req_header_echo_wasm
+    req_body_echo_wasm
     access_auth_gate_wasm
     missing_export_wasm
     missing_memory_wasm
@@ -79,6 +80,10 @@ sub req_header_set_only_wasm {
 
 sub req_header_echo_wasm {
     return wasm_root() . "/wasm/http-guests/src/req_header_echo.wat";
+}
+
+sub req_body_echo_wasm {
+    return wasm_root() . "/wasm/http-guests/src/req_body_echo.wat";
 }
 
 sub access_auth_gate_wasm {
