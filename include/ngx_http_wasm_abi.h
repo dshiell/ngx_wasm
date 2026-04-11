@@ -28,10 +28,12 @@ typedef struct {
     ngx_uint_t body_is_borrowed;
     ngx_uint_t content_type_set;
     ngx_uint_t response_sent;
+    ngx_uint_t request_body_set;
     ngx_uint_t abi_version;
     ngx_int_t status;
     ngx_str_t body;
     ngx_str_t content_type;
+    ngx_str_t request_body;
 } ngx_http_wasm_abi_ctx_t;
 
 void ngx_http_wasm_abi_init(ngx_http_wasm_abi_ctx_t *ctx,
@@ -52,6 +54,12 @@ ngx_int_t ngx_http_wasm_abi_req_get_header(ngx_http_wasm_abi_ctx_t *ctx,
                                            size_t name_len,
                                            u_char *buf,
                                            size_t buf_len);
+ngx_int_t ngx_http_wasm_abi_req_set_body(ngx_http_wasm_abi_ctx_t *ctx,
+                                         const u_char *data,
+                                         size_t len);
+ngx_int_t ngx_http_wasm_abi_req_get_body(ngx_http_wasm_abi_ctx_t *ctx,
+                                         u_char *buf,
+                                         size_t buf_len);
 ngx_int_t ngx_http_wasm_abi_resp_set_content_type(ngx_http_wasm_abi_ctx_t *ctx,
                                                   const u_char *data,
                                                   size_t len,

@@ -188,6 +188,36 @@ ngx_int_t ngx_http_wasm_abi_req_get_header(ngx_http_wasm_abi_ctx_t *ctx,
     return (ngx_int_t)h->value.len;
 }
 
+ngx_int_t ngx_http_wasm_abi_req_set_body(ngx_http_wasm_abi_ctx_t *ctx,
+                                         const u_char *data,
+                                         size_t len) {
+    if (ngx_http_wasm_abi_set_str(ctx, &ctx->request_body, data, len, 1) !=
+        NGX_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ctx->request_body_set = 1;
+
+    return NGX_HTTP_WASM_OK;
+}
+
+ngx_int_t ngx_http_wasm_abi_req_get_body(ngx_http_wasm_abi_ctx_t *ctx,
+                                         u_char *buf,
+                                         size_t buf_len) {
+    size_t copy_len;
+
+    if (!ctx->request_body_set) {
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    copy_len = ngx_min(ctx->request_body.len, buf_len);
+    if (copy_len != 0) {
+        ngx_memcpy(buf, ctx->request_body.data, copy_len);
+    }
+
+    return (ngx_int_t)ctx->request_body.len;
+}
+
 ngx_int_t ngx_http_wasm_abi_resp_set_content_type(ngx_http_wasm_abi_ctx_t *ctx,
                                                   const u_char *data,
                                                   size_t len,
@@ -244,24 +274,22 @@ ngx_int_t ngx_http_wasm_abi_send_response(ngx_http_wasm_abi_ctx_t *ctx) {
         return rc;
     }
 
+    if (!ctx->body_set || ctx->body.len == 0) {
+        ctx->response_sent = 1;
+        return ngx_http_send_special(ctx->request, NGX_HTTP_LAST);
+    }
+
     b = ngx_calloc_buf(ctx->request->pool);
     if (b == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    if (ctx->body_set) {
-        b->pos = ctx->body.data;
-        b->last = ctx->body.data + ctx->body.len;
-        b->memory = 1;
-    } else {
-        b->pos = NULL;
-        b->last = NULL;
-        b->sync = 1;
-    }
+    b->pos = ctx->body.data;
+    b->last = ctx->body.data + ctx->body.len;
+    b->memory = 1;
 
     b->last_buf = (ctx->request == ctx->request->main) ? 1 : 0;
     b->last_in_chain = 1;
-    b->sync = (b->last_buf || b->memory) ? 0 : 1;
 
     out.buf = b;
     out.next = NULL;
