@@ -20,6 +20,10 @@ our @EXPORT_OK = qw(
     req_header_set_only_wasm
     req_header_echo_wasm
     req_body_echo_wasm
+    resp_header_set_wasm
+    resp_header_echo_wasm
+    resp_location_set_wasm
+    resp_status_set_wasm
     access_auth_gate_wasm
     missing_export_wasm
     missing_memory_wasm
@@ -84,6 +88,22 @@ sub req_header_echo_wasm {
 
 sub req_body_echo_wasm {
     return wasm_root() . "/wasm/http-guests/src/req_body_echo.wat";
+}
+
+sub resp_header_set_wasm {
+    return wasm_root() . "/wasm/http-guests/src/resp_header_set.wat";
+}
+
+sub resp_header_echo_wasm {
+    return wasm_root() . "/wasm/http-guests/src/resp_header_echo.wat";
+}
+
+sub resp_location_set_wasm {
+    return wasm_root() . "/wasm/http-guests/src/resp_location_set.wat";
+}
+
+sub resp_status_set_wasm {
+    return wasm_root() . "/wasm/http-guests/src/resp_status_set.wat";
 }
 
 sub access_auth_gate_wasm {
