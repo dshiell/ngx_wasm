@@ -20,6 +20,9 @@ extern ngx_module_t ngx_http_wasm_module;
 
 ngx_int_t ngx_http_wasm_header_filter_init_process(void);
 ngx_int_t ngx_http_wasm_header_filter_handler(ngx_http_request_t *r);
+ngx_int_t ngx_http_wasm_body_filter_init_process(void);
+ngx_int_t ngx_http_wasm_body_filter_handler(ngx_http_request_t *r,
+                                            ngx_chain_t *in);
 ngx_int_t ngx_http_wasm_prepare_request_body(ngx_http_request_t *r,
                                              ngx_http_wasm_conf_t *wcf,
                                              ngx_http_wasm_ctx_t *ctx);

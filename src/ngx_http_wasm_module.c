@@ -31,6 +31,8 @@ ngx_http_wasm_server_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_header_filter_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
+ngx_http_wasm_body_filter_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
 ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_wasm_request_body_buffer_size(ngx_conf_t *cf,
                                                     ngx_command_t *cmd,
@@ -82,6 +84,14 @@ static ngx_command_t ngx_http_wasm_commands[] = {
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
          NGX_CONF_TAKE2,
      ngx_http_wasm_header_filter_by,
+     NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("body_filter_by_wasm"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
+         NGX_CONF_TAKE2,
+     ngx_http_wasm_body_filter_by,
      NGX_HTTP_LOC_CONF_OFFSET,
      0,
      NULL},
@@ -152,6 +162,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     conf->rewrite.set = NGX_CONF_UNSET;
     conf->server_rewrite.set = NGX_CONF_UNSET;
     conf->header_filter.set = NGX_CONF_UNSET;
+    conf->body_filter.set = NGX_CONF_UNSET;
     conf->fuel_limit = NGX_CONF_UNSET_UINT;
     conf->timeslice_fuel = NGX_CONF_UNSET_UINT;
     conf->request_body_buffer_size = NGX_CONF_UNSET_SIZE;
@@ -180,6 +191,7 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
                                    &child->server_rewrite);
     ngx_http_wasm_merge_phase_conf(&parent->header_filter,
                                    &child->header_filter);
+    ngx_http_wasm_merge_phase_conf(&parent->body_filter, &child->body_filter);
 
     return NGX_CONF_OK;
 }
@@ -316,9 +328,16 @@ static ngx_int_t ngx_http_wasm_init_module(ngx_cycle_t *cycle) {
 }
 
 static ngx_int_t ngx_http_wasm_init_process(ngx_cycle_t *cycle) {
+    ngx_int_t rc;
+
     (void)cycle;
 
-    return ngx_http_wasm_header_filter_init_process();
+    rc = ngx_http_wasm_header_filter_init_process();
+    if (rc != NGX_OK) {
+        return rc;
+    }
+
+    return ngx_http_wasm_body_filter_init_process();
 }
 
 static void ngx_http_wasm_exit_process(ngx_cycle_t *cycle) {
@@ -408,6 +427,23 @@ ngx_http_wasm_header_filter_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     wcf = conf;
 
     switch (ngx_http_wasm_configure_phase(cf, &wcf->header_filter)) {
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
+}
+
+static char *
+ngx_http_wasm_body_filter_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+
+    (void)cmd;
+    wcf = conf;
+
+    switch (ngx_http_wasm_configure_phase(cf, &wcf->body_filter)) {
         case NGX_OK:
             return NGX_CONF_OK;
         case NGX_DECLINED:

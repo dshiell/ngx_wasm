@@ -24,8 +24,16 @@ ngx_int_t ngx_http_wasm_header_filter_handler(ngx_http_request_t *r) {
     wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
     wmcf = ngx_http_get_module_main_conf(r, ngx_http_wasm_module);
 
-    if (wcf == NULL || wcf->header_filter.set != 1 || wmcf == NULL ||
-        wmcf->runtime == NULL) {
+    if (wcf == NULL || wmcf == NULL || wmcf->runtime == NULL) {
+        return ngx_http_wasm_next_header_filter(r);
+    }
+
+    if (wcf->body_filter.set == 1 && !r->header_only) {
+        ngx_http_clear_content_length(r);
+        ngx_http_clear_accept_ranges(r);
+    }
+
+    if (wcf->header_filter.set != 1) {
         return ngx_http_wasm_next_header_filter(r);
     }
 

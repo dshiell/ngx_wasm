@@ -524,6 +524,25 @@ ngx_int_t ngx_http_wasm_abi_req_get_body(ngx_http_wasm_abi_ctx_t *ctx,
     return (ngx_int_t)ctx->request_body.len;
 }
 
+ngx_int_t
+ngx_http_wasm_abi_resp_set_body_chunk_input(ngx_http_wasm_abi_ctx_t *ctx,
+                                            const u_char *data,
+                                            size_t len,
+                                            ngx_uint_t eof) {
+    if (ngx_http_wasm_abi_set_str(ctx, &ctx->resp_body_chunk, data, len, 0) !=
+        NGX_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ctx->resp_body_chunk_set = 1;
+    ctx->resp_body_chunk_eof = eof;
+    ctx->resp_body_chunk_output_set = 0;
+    ctx->resp_body_chunk_output.data = NULL;
+    ctx->resp_body_chunk_output.len = 0;
+
+    return NGX_HTTP_WASM_OK;
+}
+
 ngx_int_t ngx_http_wasm_abi_resp_set_header(ngx_http_wasm_abi_ctx_t *ctx,
                                             const u_char *name,
                                             size_t name_len,
@@ -626,6 +645,63 @@ ngx_int_t ngx_http_wasm_abi_resp_set_content_type(ngx_http_wasm_abi_ctx_t *ctx,
     }
 
     ctx->content_type_set = 1;
+
+    return NGX_HTTP_WASM_OK;
+}
+
+ngx_int_t ngx_http_wasm_abi_resp_get_body_chunk(ngx_http_wasm_abi_ctx_t *ctx,
+                                                u_char *buf,
+                                                size_t buf_len) {
+    size_t copy_len;
+
+    if (ngx_http_wasm_abi_require(ctx,
+                                  NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_READ) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (!ctx->resp_body_chunk_set) {
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    copy_len = ngx_min(ctx->resp_body_chunk.len, buf_len);
+    if (copy_len != 0) {
+        ngx_memcpy(buf, ctx->resp_body_chunk.data, copy_len);
+    }
+
+    return (ngx_int_t)ctx->resp_body_chunk.len;
+}
+
+ngx_int_t
+ngx_http_wasm_abi_resp_get_body_chunk_eof(ngx_http_wasm_abi_ctx_t *ctx) {
+    if (ngx_http_wasm_abi_require(ctx,
+                                  NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_READ) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (!ctx->resp_body_chunk_set) {
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    return ctx->resp_body_chunk_eof ? 1 : 0;
+}
+
+ngx_int_t ngx_http_wasm_abi_resp_set_body_chunk(ngx_http_wasm_abi_ctx_t *ctx,
+                                                const u_char *data,
+                                                size_t len) {
+    if (ngx_http_wasm_abi_require(
+            ctx, NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_WRITE) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ngx_http_wasm_abi_set_str(
+            ctx, &ctx->resp_body_chunk_output, data, len, 1) != NGX_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ctx->resp_body_chunk_output_set = 1;
 
     return NGX_HTTP_WASM_OK;
 }

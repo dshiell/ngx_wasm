@@ -35,6 +35,7 @@ typedef enum {
     NGX_HTTP_WASM_PHASE_REWRITE,
     NGX_HTTP_WASM_PHASE_SERVER_REWRITE,
     NGX_HTTP_WASM_PHASE_HEADER_FILTER,
+    NGX_HTTP_WASM_PHASE_BODY_FILTER,
 } ngx_http_wasm_phase_e;
 
 struct ngx_http_wasm_phase_conf_s {
@@ -57,6 +58,7 @@ typedef struct {
     ngx_http_wasm_phase_conf_t rewrite;
     ngx_http_wasm_phase_conf_t server_rewrite;
     ngx_http_wasm_phase_conf_t header_filter;
+    ngx_http_wasm_phase_conf_t body_filter;
 } ngx_http_wasm_conf_t;
 
 typedef struct {
