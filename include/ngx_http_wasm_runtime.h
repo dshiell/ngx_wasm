@@ -55,6 +55,7 @@ struct ngx_http_wasm_phase_conf_s {
 typedef struct {
     ngx_array_t *modules;
     ngx_http_wasm_runtime_state_t *runtime;
+    ngx_http_wasm_shm_zone_t *shm_zone;
 } ngx_http_wasm_main_conf_t;
 
 typedef struct {

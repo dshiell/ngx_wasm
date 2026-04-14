@@ -8,6 +8,7 @@ TARGETS = \
 	$(OUT_DIR)/hello_world.wasm \
 	$(OUT_DIR)/health.wasm \
 	$(OUT_DIR)/fuel_yield_rust.wasm \
+	$(OUT_DIR)/shm_error_check.wasm \
 	$(OUT_DIR)/ssl_select_cert.wasm \
 	$(OUT_DIR)/ssl_reject_blocked.wasm
 
@@ -48,6 +49,11 @@ $(OUT_DIR)/health.wasm: src/health.rs
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
 
 $(OUT_DIR)/fuel_yield_rust.wasm: src/fuel_yield.rs
+	mkdir -p $(OUT_DIR)
+	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
+		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
+
+$(OUT_DIR)/shm_error_check.wasm: src/shm_error_check.rs
 	mkdir -p $(OUT_DIR)
 	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<

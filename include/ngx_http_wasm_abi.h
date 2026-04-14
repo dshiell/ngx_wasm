@@ -8,6 +8,8 @@
 #include <ngx_event_openssl.h>
 #endif
 
+#include <ngx_http_wasm_shm.h>
+
 #define NGX_HTTP_WASM_ABI_VERSION 1
 
 #define NGX_HTTP_WASM_OK 0
@@ -37,6 +39,7 @@
 #define NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET 0x0400
 #define NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT 0x0800
 #define NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET 0x1000
+#define NGX_HTTP_WASM_ABI_CAP_SHARED_KV 0x2000
 
 typedef struct {
     ngx_http_request_t *request;
@@ -44,6 +47,7 @@ typedef struct {
 #if (NGX_HTTP_SSL)
     ngx_ssl_conn_t *ssl_conn;
 #endif
+    ngx_http_wasm_shm_zone_t *shm_zone;
     ngx_uint_t status_set;
     ngx_uint_t body_set;
     ngx_uint_t body_is_borrowed;
@@ -71,6 +75,7 @@ void ngx_http_wasm_abi_init(ngx_http_wasm_abi_ctx_t *ctx,
                             ngx_ssl_conn_t *ssl_conn,
 #endif
                             ngx_connection_t *c,
+                            ngx_http_wasm_shm_zone_t *shm_zone,
                             ngx_uint_t capabilities);
 ngx_int_t ngx_http_wasm_abi_log(ngx_http_wasm_abi_ctx_t *ctx,
                                 ngx_uint_t level,
@@ -126,6 +131,19 @@ ngx_int_t ngx_http_wasm_abi_resp_set_content_type(ngx_http_wasm_abi_ctx_t *ctx,
                                                   const u_char *data,
                                                   size_t len,
                                                   ngx_uint_t copy);
+ngx_int_t ngx_http_wasm_abi_shm_get(ngx_http_wasm_abi_ctx_t *ctx,
+                                    const u_char *key,
+                                    size_t key_len,
+                                    u_char *buf,
+                                    size_t buf_len);
+ngx_int_t ngx_http_wasm_abi_shm_set(ngx_http_wasm_abi_ctx_t *ctx,
+                                    const u_char *key,
+                                    size_t key_len,
+                                    const u_char *value,
+                                    size_t value_len);
+ngx_int_t ngx_http_wasm_abi_shm_delete(ngx_http_wasm_abi_ctx_t *ctx,
+                                       const u_char *key,
+                                       size_t key_len);
 ngx_int_t ngx_http_wasm_abi_resp_get_body_chunk(ngx_http_wasm_abi_ctx_t *ctx,
                                                 u_char *buf,
                                                 size_t buf_len);

@@ -65,6 +65,7 @@ void ngx_http_wasm_abi_init(ngx_http_wasm_abi_ctx_t *ctx,
                             ngx_ssl_conn_t *ssl_conn,
 #endif
                             ngx_connection_t *c,
+                            ngx_http_wasm_shm_zone_t *shm_zone,
                             ngx_uint_t capabilities) {
     ngx_memzero(ctx, sizeof(*ctx));
 
@@ -73,6 +74,7 @@ void ngx_http_wasm_abi_init(ngx_http_wasm_abi_ctx_t *ctx,
     ctx->ssl_conn = ssl_conn;
 #endif
     ctx->connection = c;
+    ctx->shm_zone = shm_zone;
     ctx->abi_version = NGX_HTTP_WASM_ABI_VERSION;
     ctx->capabilities = capabilities;
     ctx->status = NGX_HTTP_OK;
@@ -436,6 +438,43 @@ ngx_int_t ngx_http_wasm_abi_resp_get_status(ngx_http_wasm_abi_ctx_t *ctx) {
     }
 
     return ctx->request->headers_out.status;
+}
+
+ngx_int_t ngx_http_wasm_abi_shm_get(ngx_http_wasm_abi_ctx_t *ctx,
+                                    const u_char *key,
+                                    size_t key_len,
+                                    u_char *buf,
+                                    size_t buf_len) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SHARED_KV) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_shm_get(ctx->shm_zone, key, key_len, buf, buf_len);
+}
+
+ngx_int_t ngx_http_wasm_abi_shm_set(ngx_http_wasm_abi_ctx_t *ctx,
+                                    const u_char *key,
+                                    size_t key_len,
+                                    const u_char *value,
+                                    size_t value_len) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SHARED_KV) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_shm_set(ctx->shm_zone, key, key_len, value, value_len);
+}
+
+ngx_int_t ngx_http_wasm_abi_shm_delete(ngx_http_wasm_abi_ctx_t *ctx,
+                                       const u_char *key,
+                                       size_t key_len) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SHARED_KV) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_shm_delete(ctx->shm_zone, key, key_len);
 }
 
 #if (NGX_HTTP_SSL)

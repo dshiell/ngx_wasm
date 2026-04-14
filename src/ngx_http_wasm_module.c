@@ -8,6 +8,7 @@
 
 #include <ngx_http_wasm_module_int.h>
 #include <ngx_http_wasm_runtime.h>
+#include <ngx_http_wasm_shm.h>
 
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_server_rewrite_handler(ngx_http_request_t *r);
@@ -50,6 +51,8 @@ ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_wasm_request_body_buffer_size(ngx_conf_t *cf,
                                                     ngx_command_t *cmd,
                                                     void *conf);
+static char *
+ngx_http_wasm_shm_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_wasm_body_filter_file_chunk_size(ngx_conf_t *cf,
                                                        ngx_command_t *cmd,
                                                        void *conf);
@@ -145,6 +148,13 @@ static ngx_command_t ngx_http_wasm_commands[] = {
          NGX_CONF_TAKE1,
      ngx_http_wasm_fuel_limit,
      NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("wasm_shm_zone"),
+     NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE2,
+     ngx_http_wasm_shm_zone,
+     NGX_HTTP_MAIN_CONF_OFFSET,
      0,
      NULL},
 
@@ -319,6 +329,30 @@ static char *ngx_http_wasm_init_main_conf(ngx_conf_t *cf, void *conf) {
     }
 
     return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_wasm_shm_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_str_t *value;
+    off_t size;
+
+    (void)cmd;
+    wmcf = conf;
+
+    value = cf->args->elts;
+    size = ngx_parse_size(&value[2]);
+    if (size == NGX_ERROR || size < (off_t)(8 * ngx_pagesize)) {
+        ngx_conf_log_error(NGX_LOG_EMERG,
+                           cf,
+                           0,
+                           "invalid wasm_shm_zone size \"%V\"",
+                           &value[2]);
+        return NGX_CONF_ERROR;
+    }
+
+    return ngx_http_wasm_shm_add_zone(
+        cf, &wmcf->shm_zone, &value[1], (size_t)size);
 }
 
 static void *ngx_http_wasm_create_srv_conf(ngx_conf_t *cf) {
