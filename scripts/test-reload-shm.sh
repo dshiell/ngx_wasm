@@ -104,6 +104,29 @@ request_body() {
     curl -sf "http://${HOST}:${PORT}$1"
 }
 
+wait_for_body() {
+    local path="$1"
+    local expected="$2"
+    local attempt
+    local body=""
+
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if body="$(request_body "${path}" 2>/dev/null)"; then
+            if [ "${body}" = "${expected}" ]; then
+                return 0
+            fi
+        fi
+        sleep 0.2
+    done
+
+    if [ -n "${body}" ]; then
+        echo "unexpected response for ${path}: ${body}" >&2
+    else
+        echo "request never succeeded for ${path}" >&2
+    fi
+    return 1
+}
+
 trap cleanup EXIT
 
 mkdir -p "${LOG_DIR}"
@@ -150,13 +173,13 @@ wait_for_pid_file || {
     exit 1
 }
 
-if [ "$(request_body /set)" != "stored" ]; then
+if ! wait_for_body /set stored; then
     echo "failed to store shared value before reload" >&2
     print_error_log
     exit 1
 fi
 
-if [ "$(request_body /get)" != "persisted-value" ]; then
+if ! wait_for_body /get persisted-value; then
     echo "failed to read shared value before reload" >&2
     print_error_log
     exit 1
@@ -175,7 +198,7 @@ fi
 
 sleep 1
 
-if [ "$(request_body /get)" != "persisted-value" ]; then
+if ! wait_for_body /get persisted-value; then
     echo "shared value did not persist across reload" >&2
     print_error_log
     exit 1
