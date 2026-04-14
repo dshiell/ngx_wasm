@@ -26,6 +26,7 @@ our @EXPORT_OK = qw(
     resp_status_set_wasm
     resp_body_upper_wasm
     resp_body_append_eof_wasm
+    resp_body_window_ab_to_x_wasm
     access_auth_gate_wasm
     missing_export_wasm
     missing_memory_wasm
@@ -114,6 +115,10 @@ sub resp_body_upper_wasm {
 
 sub resp_body_append_eof_wasm {
     return wasm_root() . "/wasm/http-guests/src/resp_body_append_eof.wat";
+}
+
+sub resp_body_window_ab_to_x_wasm {
+    return wasm_root() . "/wasm/http-guests/src/resp_body_window_ab_to_x.wat";
 }
 
 sub access_auth_gate_wasm {

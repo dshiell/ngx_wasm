@@ -70,7 +70,7 @@ NGINX_CONFIGURE_ARGS = \
 	--with-ld-opt='$(SANITIZER_LD_FLAGS)' \
 	--add-module="$(CURDIR)"
 else
-NGINX_CONFIGURE_ARGS = --add-module="$(CURDIR)"
+NGINX_CONFIGURE_ARGS = --with-threads --add-module="$(CURDIR)"
 endif
 
 .PHONY: format check-format wasm deps nginx-build build start stop bench-ab smoke test test-reload clean

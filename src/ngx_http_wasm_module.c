@@ -37,6 +37,9 @@ ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_wasm_request_body_buffer_size(ngx_conf_t *cf,
                                                     ngx_command_t *cmd,
                                                     void *conf);
+static char *ngx_http_wasm_body_filter_file_chunk_size(ngx_conf_t *cf,
+                                                       ngx_command_t *cmd,
+                                                       void *conf);
 static char *
 ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
@@ -112,6 +115,14 @@ static ngx_command_t ngx_http_wasm_commands[] = {
      0,
      NULL},
 
+    {ngx_string("wasm_body_filter_file_chunk_size"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
+         NGX_CONF_TAKE1,
+     ngx_http_wasm_body_filter_file_chunk_size,
+     NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
     {ngx_string("wasm_timeslice_fuel"),
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
          NGX_CONF_TAKE1,
@@ -166,6 +177,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     conf->fuel_limit = NGX_CONF_UNSET_UINT;
     conf->timeslice_fuel = NGX_CONF_UNSET_UINT;
     conf->request_body_buffer_size = NGX_CONF_UNSET_SIZE;
+    conf->body_filter_file_chunk_size = NGX_CONF_UNSET_SIZE;
 
     return conf;
 }
@@ -184,6 +196,10 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
     ngx_conf_merge_size_value(child->request_body_buffer_size,
                               parent->request_body_buffer_size,
                               NGX_HTTP_WASM_DEFAULT_REQUEST_BODY_BUFFER_SIZE);
+    ngx_conf_merge_size_value(
+        child->body_filter_file_chunk_size,
+        parent->body_filter_file_chunk_size,
+        NGX_HTTP_WASM_DEFAULT_BODY_FILTER_FILE_CHUNK_SIZE);
 
     ngx_http_wasm_merge_phase_conf(&parent->content, &child->content);
     ngx_http_wasm_merge_phase_conf(&parent->rewrite, &child->rewrite);
@@ -496,6 +512,33 @@ static char *ngx_http_wasm_request_body_buffer_size(ngx_conf_t *cf,
     return NGX_CONF_OK;
 }
 
+static char *ngx_http_wasm_body_filter_file_chunk_size(ngx_conf_t *cf,
+                                                       ngx_command_t *cmd,
+                                                       void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+    ngx_str_t *value;
+    off_t size;
+
+    (void)cmd;
+    wcf = conf;
+
+    value = cf->args->elts;
+    size = ngx_parse_size(&value[1]);
+    if (size == NGX_ERROR || size < 0) {
+        ngx_conf_log_error(
+            NGX_LOG_EMERG,
+            cf,
+            0,
+            "invalid wasm_body_filter_file_chunk_size value \"%V\"",
+            &value[1]);
+        return NGX_CONF_ERROR;
+    }
+
+    wcf->body_filter_file_chunk_size = (size_t)size;
+
+    return NGX_CONF_OK;
+}
+
 static char *
 ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_http_wasm_conf_t *wcf;
@@ -788,6 +831,10 @@ void ngx_http_wasm_cleanup_ctx(void *data) {
 
     if (ctx->header_filter_exec_set) {
         ngx_http_wasm_runtime_cleanup_exec_ctx(&ctx->header_filter_exec);
+    }
+
+    if (ctx->body_filter_exec_set) {
+        ngx_http_wasm_runtime_cleanup_exec_ctx(&ctx->body_filter_exec);
     }
 }
 

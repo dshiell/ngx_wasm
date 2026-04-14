@@ -10,6 +10,7 @@
 #define NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT 1000000
 #define NGX_HTTP_WASM_DEFAULT_TIMESLICE_FUEL 10000
 #define NGX_HTTP_WASM_DEFAULT_REQUEST_BODY_BUFFER_SIZE 0
+#define NGX_HTTP_WASM_DEFAULT_BODY_FILTER_FILE_CHUNK_SIZE 16384
 
 typedef struct ngx_http_wasm_cached_module_s ngx_http_wasm_cached_module_t;
 typedef struct ngx_http_wasm_runtime_state_s ngx_http_wasm_runtime_state_t;
@@ -54,6 +55,7 @@ typedef struct {
     ngx_uint_t fuel_limit;
     ngx_uint_t timeslice_fuel;
     size_t request_body_buffer_size;
+    size_t body_filter_file_chunk_size;
     ngx_http_wasm_phase_conf_t content;
     ngx_http_wasm_phase_conf_t rewrite;
     ngx_http_wasm_phase_conf_t server_rewrite;
