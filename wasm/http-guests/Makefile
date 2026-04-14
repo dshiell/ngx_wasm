@@ -7,7 +7,9 @@ OUT_DIR ?= build
 TARGETS = \
 	$(OUT_DIR)/hello_world.wasm \
 	$(OUT_DIR)/health.wasm \
-	$(OUT_DIR)/fuel_yield_rust.wasm
+	$(OUT_DIR)/fuel_yield_rust.wasm \
+	$(OUT_DIR)/ssl_select_cert.wasm \
+	$(OUT_DIR)/ssl_reject_blocked.wasm
 
 .PHONY: build clean check-toolchain
 
@@ -46,6 +48,16 @@ $(OUT_DIR)/health.wasm: src/health.rs
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
 
 $(OUT_DIR)/fuel_yield_rust.wasm: src/fuel_yield.rs
+	mkdir -p $(OUT_DIR)
+	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
+		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
+
+$(OUT_DIR)/ssl_select_cert.wasm: src/ssl_select_cert.rs src/ssl/selected.local.crt src/ssl/selected.local.key
+	mkdir -p $(OUT_DIR)
+	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
+		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<
+
+$(OUT_DIR)/ssl_reject_blocked.wasm: src/ssl_reject_blocked.rs
 	mkdir -p $(OUT_DIR)
 	$(RUSTC) --edition=2021 --target $(WASM_TARGET) --crate-type cdylib \
 		-C opt-level=z -C panic=abort $(RUSTFLAGS) -o $@ $<

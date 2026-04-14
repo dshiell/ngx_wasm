@@ -4,6 +4,9 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#if (NGX_HTTP_SSL)
+#include <ngx_event_openssl.h>
+#endif
 
 #define NGX_HTTP_WASM_ABI_VERSION 1
 
@@ -31,9 +34,16 @@
 #define NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_READ 0x0080
 #define NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_WRITE 0x0100
 #define NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_GET 0x0200
+#define NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET 0x0400
+#define NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT 0x0800
+#define NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET 0x1000
 
 typedef struct {
     ngx_http_request_t *request;
+    ngx_connection_t *connection;
+#if (NGX_HTTP_SSL)
+    ngx_ssl_conn_t *ssl_conn;
+#endif
     ngx_uint_t status_set;
     ngx_uint_t body_set;
     ngx_uint_t body_is_borrowed;
@@ -43,9 +53,11 @@ typedef struct {
     ngx_uint_t resp_body_chunk_set;
     ngx_uint_t resp_body_chunk_output_set;
     ngx_uint_t resp_body_chunk_eof;
+    ngx_uint_t ssl_handshake_rejected;
     ngx_uint_t abi_version;
     ngx_uint_t capabilities;
     ngx_int_t status;
+    ngx_int_t ssl_handshake_alert;
     ngx_str_t body;
     ngx_str_t content_type;
     ngx_str_t request_body;
@@ -55,6 +67,10 @@ typedef struct {
 
 void ngx_http_wasm_abi_init(ngx_http_wasm_abi_ctx_t *ctx,
                             ngx_http_request_t *r,
+#if (NGX_HTTP_SSL)
+                            ngx_ssl_conn_t *ssl_conn,
+#endif
+                            ngx_connection_t *c,
                             ngx_uint_t capabilities);
 ngx_int_t ngx_http_wasm_abi_log(ngx_http_wasm_abi_ctx_t *ctx,
                                 ngx_uint_t level,
@@ -63,6 +79,18 @@ ngx_int_t ngx_http_wasm_abi_log(ngx_http_wasm_abi_ctx_t *ctx,
 ngx_int_t ngx_http_wasm_abi_resp_set_status(ngx_http_wasm_abi_ctx_t *ctx,
                                             ngx_int_t status);
 ngx_int_t ngx_http_wasm_abi_resp_get_status(ngx_http_wasm_abi_ctx_t *ctx);
+#if (NGX_HTTP_SSL)
+ngx_int_t ngx_http_wasm_abi_ssl_get_server_name(ngx_http_wasm_abi_ctx_t *ctx,
+                                                u_char *buf,
+                                                size_t buf_len);
+ngx_int_t ngx_http_wasm_abi_ssl_reject_handshake(ngx_http_wasm_abi_ctx_t *ctx,
+                                                 ngx_int_t alert);
+ngx_int_t ngx_http_wasm_abi_ssl_set_certificate(ngx_http_wasm_abi_ctx_t *ctx,
+                                                const u_char *cert,
+                                                size_t cert_len,
+                                                const u_char *key,
+                                                size_t key_len);
+#endif
 ngx_int_t ngx_http_wasm_abi_req_set_header(ngx_http_wasm_abi_ctx_t *ctx,
                                            const u_char *name,
                                            size_t name_len,

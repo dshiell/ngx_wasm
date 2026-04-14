@@ -21,6 +21,14 @@ Current Phase 1 execution model:
 - host state is request-local
 - guest must return `0` on success
 
+Current SSL hook execution model:
+
+- one synchronous guest export may be invoked during TLS client-hello handling
+- one synchronous guest export may be invoked during TLS certificate selection
+- these hooks are connection-scoped, not request-scoped
+- they do not support suspension or yielding
+- they do not expose normal HTTP request/response mutation APIs
+
 ## Required Guest Export
 
 Current required guest export:
@@ -52,6 +60,10 @@ int ngx_wasm_req_set_header(const void *name_ptr, int name_len,
                             const void *value_ptr, int value_len);
 int ngx_wasm_req_get_header(const void *name_ptr, int name_len,
                             void *buf_ptr, int buf_len);
+int ngx_wasm_ssl_get_server_name(void *buf_ptr, int buf_len);
+int ngx_wasm_ssl_reject_handshake(int alert);
+int ngx_wasm_ssl_set_certificate(const void *cert_ptr, int cert_len,
+                                 const void *key_ptr, int key_len);
 int ngx_wasm_resp_write(const void *ptr, int len);
 ```
 
@@ -85,6 +97,24 @@ Expected semantics:
   - writes the response body from guest linear memory
   - returns `0` on success
 
+- `ngx_wasm_ssl_get_server_name`
+  - returns the current TLS SNI server name during SSL hooks
+  - copies up to `buf_len` bytes into `buf_ptr`
+  - returns the full length on success
+  - returns `-1` when no SNI value is present
+
+- `ngx_wasm_ssl_reject_handshake`
+  - marks the current TLS handshake for rejection
+  - the provided alert is currently honored only from the client-hello hook
+  - returns `0` on success
+
+- `ngx_wasm_ssl_set_certificate`
+  - installs a PEM-encoded certificate and private key on the current TLS
+    connection
+  - currently supports a single certificate and private key pair
+  - does not yet support certificate-chain installation
+  - returns `0` on success
+
 ## Memory Model
 
 Current assumptions:
@@ -98,6 +128,7 @@ Current copy policy:
 
 - log reads may borrow guest memory for the duration of the immediate call
 - response body writes are copied into the NGINX request pool
+- SSL hook state is connection-local and lasts only for the current handshake
 
 ## Return Conventions
 
@@ -109,6 +140,17 @@ Current conventions:
 - `ngx_wasm_req_get_header` returns a non-negative length on success
 - `ngx_wasm_req_get_header` returns `-1` for missing headers
 - negative/error returns are otherwise reserved for host-side failures
+
+## Current SSL Limitations
+
+- `ssl_client_hello_by_wasm` and `ssl_certificate_by_wasm` are synchronous only
+- `ngx_wasm_yield()` is not allowed in SSL hooks
+- HTTP request headers, request body, response headers, response status, and
+  response body APIs are not available in SSL hooks
+- `ssl_certificate_by_wasm` currently supports only in-memory PEM certificate
+  and key installation
+- certificate chain installation is not implemented yet
+- TLS session fetch/store hooks are not implemented yet
 
 ## Minimal C Guest Example
 

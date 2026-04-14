@@ -83,6 +83,9 @@ static ngx_int_t
 ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
                                   wasmtime_context_t *context,
                                   const char *phase);
+static ngx_log_t *ngx_http_wasm_runtime_exec_log(ngx_http_wasm_exec_ctx_t *ctx);
+static ngx_pool_t *
+ngx_http_wasm_runtime_exec_pool(ngx_http_wasm_exec_ctx_t *ctx);
 static void ngx_http_wasm_runtime_begin_run(ngx_http_wasm_exec_ctx_t *ctx);
 static void ngx_http_wasm_runtime_log_suspend(ngx_http_wasm_exec_ctx_t *ctx,
                                               const char *reason);
@@ -131,6 +134,27 @@ ngx_http_wasm_host_resp_get_status(void *env,
                                    size_t nargs,
                                    wasmtime_val_t *results,
                                    size_t nresults);
+static wasm_trap_t *
+ngx_http_wasm_host_ssl_get_server_name(void *env,
+                                       wasmtime_caller_t *caller,
+                                       const wasmtime_val_t *args,
+                                       size_t nargs,
+                                       wasmtime_val_t *results,
+                                       size_t nresults);
+static wasm_trap_t *
+ngx_http_wasm_host_ssl_reject_handshake(void *env,
+                                        wasmtime_caller_t *caller,
+                                        const wasmtime_val_t *args,
+                                        size_t nargs,
+                                        wasmtime_val_t *results,
+                                        size_t nresults);
+static wasm_trap_t *
+ngx_http_wasm_host_ssl_set_certificate(void *env,
+                                       wasmtime_caller_t *caller,
+                                       const wasmtime_val_t *args,
+                                       size_t nargs,
+                                       wasmtime_val_t *results,
+                                       size_t nresults);
 static wasm_trap_t *
 ngx_http_wasm_host_req_set_header(void *env,
                                   wasmtime_caller_t *caller,
@@ -303,6 +327,10 @@ void ngx_http_wasm_runtime_init_exec_ctx(
     ngx_memzero(ctx, sizeof(*ctx));
 
     ctx->request = r;
+    ctx->connection = r->connection;
+#if (NGX_HTTP_SSL)
+    ctx->ssl_connection = NULL;
+#endif
     ctx->conf = conf;
     ctx->runtime = runtime;
     ctx->fuel_limit = 0;
@@ -316,6 +344,10 @@ void ngx_http_wasm_runtime_init_exec_ctx(
 
     ngx_http_wasm_abi_init(&ctx->abi,
                            r,
+#if (NGX_HTTP_SSL)
+                           NULL,
+#endif
+                           r->connection,
                            NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
                                NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RW |
                                NGX_HTTP_WASM_ABI_CAP_REQ_BODY_GET |
@@ -337,8 +369,56 @@ void ngx_http_wasm_runtime_init_exec_ctx(
     } else if (phase_kind == NGX_HTTP_WASM_PHASE_LOG) {
         ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
                                 NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_GET;
+    } else if (phase_kind == NGX_HTTP_WASM_PHASE_SSL_CLIENT_HELLO) {
+        ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET |
+                                NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT;
+    } else if (phase_kind == NGX_HTTP_WASM_PHASE_SSL_CERTIFICATE) {
+        ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET |
+                                NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT |
+                                NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET;
     }
 }
+
+#if (NGX_HTTP_SSL)
+void ngx_http_wasm_runtime_init_ssl_exec_ctx(
+    ngx_http_wasm_exec_ctx_t *ctx,
+    ngx_connection_t *c,
+    ngx_ssl_conn_t *ssl_conn,
+    ngx_http_wasm_phase_conf_t *conf,
+    ngx_http_wasm_phase_e phase_kind,
+    ngx_http_wasm_runtime_state_t *runtime) {
+    ngx_memzero(ctx, sizeof(*ctx));
+
+    ctx->request = NULL;
+    ctx->connection = c;
+    ctx->ssl_connection = ssl_conn;
+    ctx->conf = conf;
+    ctx->runtime = runtime;
+    ctx->fuel_limit = 0;
+    ctx->timeslice_fuel = 0;
+    ctx->fuel_remaining = 0;
+    ctx->state = NGX_HTTP_WASM_EXEC_READY;
+    ctx->suspend_kind = NGX_HTTP_WASM_SUSPEND_NONE;
+    ctx->phase_kind = phase_kind;
+    ctx->resume_state = NULL;
+    ctx->yielded = 0;
+
+    ngx_http_wasm_abi_init(&ctx->abi,
+                           NULL,
+                           ssl_conn,
+                           c,
+                           NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET);
+
+    if (phase_kind == NGX_HTTP_WASM_PHASE_SSL_CLIENT_HELLO) {
+        ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET |
+                                NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT;
+    } else if (phase_kind == NGX_HTTP_WASM_PHASE_SSL_CERTIFICATE) {
+        ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET |
+                                NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT |
+                                NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET;
+    }
+}
+#endif
 
 void ngx_http_wasm_runtime_cleanup_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx) {
     if (ctx == NULL || ctx->resume_state == NULL) {
@@ -347,6 +427,32 @@ void ngx_http_wasm_runtime_cleanup_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx) {
 
     ngx_http_wasm_runtime_reset_resume_state(ctx->resume_state);
     ctx->resume_state = NULL;
+}
+
+static ngx_log_t *
+ngx_http_wasm_runtime_exec_log(ngx_http_wasm_exec_ctx_t *ctx) {
+    if (ctx->request != NULL) {
+        return ctx->request->connection->log;
+    }
+
+    if (ctx->connection != NULL) {
+        return ctx->connection->log;
+    }
+
+    return ngx_cycle->log;
+}
+
+static ngx_pool_t *
+ngx_http_wasm_runtime_exec_pool(ngx_http_wasm_exec_ctx_t *ctx) {
+    if (ctx->request != NULL) {
+        return ctx->request->pool;
+    }
+
+    if (ctx->connection != NULL) {
+        return ctx->connection->pool;
+    }
+
+    return NULL;
 }
 
 static ngx_int_t
@@ -376,6 +482,33 @@ ngx_http_wasm_runtime_define_host_funcs(ngx_http_wasm_runtime_state_t *rt) {
             "ngx_wasm_resp_get_status",
             wasm_functype_new_0_1(wasm_valtype_new(WASM_I32)),
             ngx_http_wasm_host_resp_get_status) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_ssl_get_server_name",
+            wasm_functype_new_2_1(wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32)),
+            ngx_http_wasm_host_ssl_get_server_name) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_ssl_reject_handshake",
+            wasm_functype_new_1_1(wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32)),
+            ngx_http_wasm_host_ssl_reject_handshake) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_ssl_set_certificate",
+            ngx_http_wasm_runtime_functype_4_1(),
+            ngx_http_wasm_host_ssl_set_certificate) != NGX_OK) {
         return NGX_ERROR;
     }
 
@@ -744,7 +877,7 @@ ngx_http_wasm_runtime_update_fuel(ngx_http_wasm_exec_ctx_t *ctx,
     error = wasmtime_context_get_fuel(context, &fuel);
     if (error != NULL) {
         ngx_http_wasm_runtime_log_error(
-            ctx->request->connection->log, phase, error);
+            ngx_http_wasm_runtime_exec_log(ctx), phase, error);
         return NGX_ERROR;
     }
 
@@ -762,7 +895,7 @@ static void ngx_http_wasm_runtime_begin_run(ngx_http_wasm_exec_ctx_t *ctx) {
 static void ngx_http_wasm_runtime_log_suspend(ngx_http_wasm_exec_ctx_t *ctx,
                                               const char *reason) {
     ngx_log_error(NGX_LOG_NOTICE,
-                  ctx->request->connection->log,
+                  ngx_http_wasm_runtime_exec_log(ctx),
                   0,
                   "ngx_wasm: suspending request: reason=%s fuel_limit=%uL "
                   "timeslice_fuel=%uL fuel_remaining=%uL",
@@ -832,7 +965,7 @@ ngx_http_wasm_runtime_prepare_async_op(ngx_http_wasm_exec_ctx_t *ctx,
         (resume->future_kind == NGX_HTTP_WASM_FUTURE_NONE)) {
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
-                      ctx->request->connection->log,
+                      ngx_http_wasm_runtime_exec_log(ctx),
                       0,
                       "ngx_wasm: inconsistent async future state");
         return NGX_ERROR;
@@ -841,7 +974,7 @@ ngx_http_wasm_runtime_prepare_async_op(ngx_http_wasm_exec_ctx_t *ctx,
     if (resume->future != NULL) {
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
-                      ctx->request->connection->log,
+                      ngx_http_wasm_runtime_exec_log(ctx),
                       0,
                       "ngx_wasm: attempted to start async work while another "
                       "future is still alive");
@@ -872,7 +1005,7 @@ ngx_http_wasm_runtime_prepare_async_yield(ngx_http_wasm_exec_ctx_t *ctx,
     error = wasmtime_context_fuel_async_yield_interval(context, interval);
     if (error != NULL) {
         ngx_http_wasm_runtime_log_error(
-            ctx->request->connection->log,
+            ngx_http_wasm_runtime_exec_log(ctx),
             "failed to configure async fuel yield interval",
             error);
         return NGX_ERROR;
@@ -1069,6 +1202,105 @@ ngx_http_wasm_host_resp_get_status(void *env,
 
     results[0].kind = WASMTIME_I32;
     results[0].of.i32 = ngx_http_wasm_abi_resp_get_status(&ctx->abi);
+
+    return NULL;
+}
+
+static wasm_trap_t *
+ngx_http_wasm_host_ssl_get_server_name(void *env,
+                                       wasmtime_caller_t *caller,
+                                       const wasmtime_val_t *args,
+                                       size_t nargs,
+                                       wasmtime_val_t *results,
+                                       size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+    u_char *buf;
+    wasm_trap_t *trap;
+
+    (void)env;
+
+    if (nargs != 2 || nresults != 1 || args[0].kind != WASMTIME_I32 ||
+        args[1].kind != WASMTIME_I32) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_ssl_get_server_name signature");
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory_mut(
+        caller, (uint32_t)args[0].of.i32, (uint32_t)args[1].of.i32, &buf);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 = ngx_http_wasm_abi_ssl_get_server_name(
+        &ctx->abi, buf, (size_t)args[1].of.i32);
+
+    return NULL;
+}
+
+static wasm_trap_t *
+ngx_http_wasm_host_ssl_reject_handshake(void *env,
+                                        wasmtime_caller_t *caller,
+                                        const wasmtime_val_t *args,
+                                        size_t nargs,
+                                        wasmtime_val_t *results,
+                                        size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+
+    (void)env;
+    (void)caller;
+
+    if (nargs != 1 || nresults != 1 || args[0].kind != WASMTIME_I32) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_ssl_reject_handshake signature");
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 =
+        ngx_http_wasm_abi_ssl_reject_handshake(&ctx->abi, args[0].of.i32);
+
+    return NULL;
+}
+
+static wasm_trap_t *
+ngx_http_wasm_host_ssl_set_certificate(void *env,
+                                       wasmtime_caller_t *caller,
+                                       const wasmtime_val_t *args,
+                                       size_t nargs,
+                                       wasmtime_val_t *results,
+                                       size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+    const u_char *cert;
+    const u_char *key;
+    wasm_trap_t *trap;
+
+    (void)env;
+
+    if (nargs != 4 || nresults != 1 || args[0].kind != WASMTIME_I32 ||
+        args[1].kind != WASMTIME_I32 || args[2].kind != WASMTIME_I32 ||
+        args[3].kind != WASMTIME_I32) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_ssl_set_certificate signature");
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory(
+        caller, (uint32_t)args[0].of.i32, (uint32_t)args[1].of.i32, &cert);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory(
+        caller, (uint32_t)args[2].of.i32, (uint32_t)args[3].of.i32, &key);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 = ngx_http_wasm_abi_ssl_set_certificate(
+        &ctx->abi, cert, (size_t)args[1].of.i32, key, (size_t)args[3].of.i32);
 
     return NULL;
 }
@@ -1456,7 +1688,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     if (rt == NULL || rt->engine == NULL || rt->linker == NULL) {
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
-                      ctx->request->connection->log,
+                      ngx_http_wasm_runtime_exec_log(ctx),
                       0,
                       "ngx_wasm: runtime not initialized");
         return NGX_ERROR;
@@ -1466,7 +1698,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     if (module == NULL || module->module == NULL) {
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
-                      ctx->request->connection->log,
+                      ngx_http_wasm_runtime_exec_log(ctx),
                       0,
                       "ngx_wasm: module \"%V\" not preloaded",
                       &ctx->conf->module_path);
@@ -1475,7 +1707,8 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
 
     resume = ctx->resume_state;
     if (resume == NULL) {
-        resume = ngx_pcalloc(ctx->request->pool, sizeof(*resume));
+        resume =
+            ngx_pcalloc(ngx_http_wasm_runtime_exec_pool(ctx), sizeof(*resume));
         if (resume == NULL) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
             return NGX_ERROR;
@@ -1492,7 +1725,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
     if (resume->store == NULL) {
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
-                      ctx->request->connection->log,
+                      ngx_http_wasm_runtime_exec_log(ctx),
                       0,
                       "ngx_wasm: failed to create Wasmtime store");
         return NGX_ERROR;
@@ -1503,8 +1736,9 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         error = wasmtime_context_set_fuel(context, ctx->fuel_limit);
         if (error != NULL) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-            ngx_http_wasm_runtime_log_error(
-                ctx->request->connection->log, "failed to set fuel", error);
+            ngx_http_wasm_runtime_log_error(ngx_http_wasm_runtime_exec_log(ctx),
+                                            "failed to set fuel",
+                                            error);
             return NGX_ERROR;
         }
     }
@@ -1535,19 +1769,19 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
                 ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
                 if (resume->error != NULL) {
                     ngx_http_wasm_runtime_log_error(
-                        ctx->request->connection->log,
+                        ngx_http_wasm_runtime_exec_log(ctx),
                         "failed to start async instantiation",
                         resume->error);
                     resume->error = NULL;
                 } else if (resume->trap != NULL) {
                     ngx_http_wasm_runtime_log_trap(
-                        ctx->request->connection->log,
+                        ngx_http_wasm_runtime_exec_log(ctx),
                         "module start trap",
                         resume->trap);
                     resume->trap = NULL;
                 } else {
                     ngx_log_error(NGX_LOG_ERR,
-                                  ctx->request->connection->log,
+                                  ngx_http_wasm_runtime_exec_log(ctx),
                                   0,
                                   "ngx_wasm: failed to create instantiation "
                                   "future");
@@ -1571,7 +1805,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             if (ctx->fuel_remaining == 0) {
                 ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
                 ngx_log_error(NGX_LOG_ERR,
-                              ctx->request->connection->log,
+                              ngx_http_wasm_runtime_exec_log(ctx),
                               0,
                               "ngx_wasm: terminal guest interruption during "
                               "instantiation: fuel_limit=%uL "
@@ -1601,7 +1835,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
 
         if (resume->error != NULL) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-            ngx_http_wasm_runtime_log_error(ctx->request->connection->log,
+            ngx_http_wasm_runtime_log_error(ngx_http_wasm_runtime_exec_log(ctx),
                                             "failed to instantiate module",
                                             resume->error);
             resume->error = NULL;
@@ -1610,7 +1844,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
 
         if (resume->trap != NULL) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-            ngx_http_wasm_runtime_log_trap(ctx->request->connection->log,
+            ngx_http_wasm_runtime_log_trap(ngx_http_wasm_runtime_exec_log(ctx),
                                            "module start trap",
                                            resume->trap);
             resume->trap = NULL;
@@ -1630,7 +1864,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             item.kind != WASMTIME_EXTERN_FUNC) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
             ngx_log_error(NGX_LOG_ERR,
-                          ctx->request->connection->log,
+                          ngx_http_wasm_runtime_exec_log(ctx),
                           0,
                           "ngx_wasm: export \"%V\" not found or not a function",
                           &ctx->conf->export_name);
@@ -1665,18 +1899,19 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
             if (resume->error != NULL) {
                 ngx_http_wasm_runtime_log_error(
-                    ctx->request->connection->log,
+                    ngx_http_wasm_runtime_exec_log(ctx),
                     "failed to start async guest call",
                     resume->error);
                 resume->error = NULL;
             } else if (resume->trap != NULL) {
-                ngx_http_wasm_runtime_log_trap(ctx->request->connection->log,
-                                               "guest trapped before execution",
-                                               resume->trap);
+                ngx_http_wasm_runtime_log_trap(
+                    ngx_http_wasm_runtime_exec_log(ctx),
+                    "guest trapped before execution",
+                    resume->trap);
                 resume->trap = NULL;
             } else {
                 ngx_log_error(NGX_LOG_ERR,
-                              ctx->request->connection->log,
+                              ngx_http_wasm_runtime_exec_log(ctx),
                               0,
                               "ngx_wasm: failed to create guest call future");
             }
@@ -1701,7 +1936,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
             ngx_log_error(
                 NGX_LOG_ERR,
-                ctx->request->connection->log,
+                ngx_http_wasm_runtime_exec_log(ctx),
                 0,
                 "ngx_wasm: terminal guest interruption: fuel_limit=%uL "
                 "timeslice_fuel=%uL fuel_remaining=%uL",
@@ -1726,8 +1961,9 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
 
     if (resume->error != NULL) {
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
-        ngx_http_wasm_runtime_log_error(
-            ctx->request->connection->log, "guest call failed", resume->error);
+        ngx_http_wasm_runtime_log_error(ngx_http_wasm_runtime_exec_log(ctx),
+                                        "guest call failed",
+                                        resume->error);
         resume->error = NULL;
         return NGX_ERROR;
     }
@@ -1746,7 +1982,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
             ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
             ngx_log_error(
                 NGX_LOG_ERR,
-                ctx->request->connection->log,
+                ngx_http_wasm_runtime_exec_log(ctx),
                 0,
                 "ngx_wasm: terminal guest interruption: fuel_limit=%uL "
                 "timeslice_fuel=%uL fuel_remaining=%uL",
@@ -1760,7 +1996,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
 
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_http_wasm_runtime_log_trap(
-            ctx->request->connection->log, "guest trapped", resume->trap);
+            ngx_http_wasm_runtime_exec_log(ctx), "guest trapped", resume->trap);
         resume->trap = NULL;
         return NGX_ERROR;
     }
@@ -1769,7 +2005,7 @@ ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx) {
         resume->results[0].of.i32 != 0) {
         ctx->state = NGX_HTTP_WASM_EXEC_ERROR;
         ngx_log_error(NGX_LOG_ERR,
-                      ctx->request->connection->log,
+                      ngx_http_wasm_runtime_exec_log(ctx),
                       0,
                       "ngx_wasm: guest export \"%V\" returned %d",
                       &ctx->conf->export_name,
