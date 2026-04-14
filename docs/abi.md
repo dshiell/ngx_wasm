@@ -56,6 +56,11 @@ Current planned/imported host functions:
 ```c
 int ngx_wasm_log(int level, const void *ptr, int len);
 int ngx_wasm_resp_set_status(int status);
+int ngx_wasm_shm_get(const void *key_ptr, int key_len,
+                     void *buf_ptr, int buf_len);
+int ngx_wasm_shm_set(const void *key_ptr, int key_len,
+                     const void *value_ptr, int value_len);
+int ngx_wasm_shm_delete(const void *key_ptr, int key_len);
 int ngx_wasm_req_set_header(const void *name_ptr, int name_len,
                             const void *value_ptr, int value_len);
 int ngx_wasm_req_get_header(const void *name_ptr, int name_len,
@@ -76,6 +81,25 @@ Expected semantics:
 - `ngx_wasm_resp_set_status`
   - sets the HTTP response status code
   - returns `0` on success
+
+- `ngx_wasm_shm_get`
+  - reads a byte-string value from the configured `wasm_shm_zone`
+  - copies up to `buf_len` bytes into `buf_ptr`
+  - returns the full stored value length on success, even if truncated by the
+    provided buffer
+  - returns `-1` when the key is missing
+  - returns `-2` on invalid arguments, missing zone, or host-side failure
+
+- `ngx_wasm_shm_set`
+  - inserts or replaces a byte-string value in the configured `wasm_shm_zone`
+  - keys and values are compared and stored byte-for-byte
+  - returns `0` on success
+  - returns `-2` on invalid arguments, missing zone, or allocation failure
+
+- `ngx_wasm_shm_delete`
+  - removes a key from the configured `wasm_shm_zone`
+  - returns `0` on success, including deleting a missing key
+  - returns `-2` on invalid arguments, missing zone, or host-side failure
 
 - `ngx_wasm_req_set_header`
   - sets or replaces a request header visible to later nginx processing
@@ -129,6 +153,8 @@ Current copy policy:
 - log reads may borrow guest memory for the duration of the immediate call
 - response body writes are copied into the NGINX request pool
 - SSL hook state is connection-local and lasts only for the current handshake
+- shared-memory KV state is host-owned and shared across workers through an
+  nginx shared memory zone
 
 ## Return Conventions
 
@@ -137,9 +163,22 @@ Current conventions:
 - guest export returns `0` on success
 - non-zero guest return values are treated as execution failure
 - host import functions return `0` on success
+- shared-memory operations return `0` on success except `ngx_wasm_shm_get`,
+  which returns the stored length on success
 - `ngx_wasm_req_get_header` returns a non-negative length on success
 - `ngx_wasm_req_get_header` returns `-1` for missing headers
+- `ngx_wasm_shm_get` returns `-1` for missing keys
 - negative/error returns are otherwise reserved for host-side failures
+
+## Current Shared Memory KV Limitations
+
+- a single default `wasm_shm_zone` is supported in v1
+- keys and values are opaque bytes with byte-for-byte comparison
+- maximum key length is currently `256` bytes
+- maximum value length is currently `65535` bytes
+- no TTL, eviction, atomic increment, or list operations yet
+- data survives nginx reload while the zone remains configured, but not a full
+  nginx restart
 
 ## Current SSL Limitations
 

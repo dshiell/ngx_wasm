@@ -20,6 +20,12 @@ our @EXPORT_OK = qw(
     req_header_set_only_wasm
     req_header_echo_wasm
     req_body_echo_wasm
+    shm_roundtrip_wasm
+    shm_set_wasm
+    shm_set_only_wasm
+    shm_get_wasm
+    shm_delete_wasm
+    shm_error_check_wasm
     resp_header_set_wasm
     resp_header_echo_wasm
     resp_location_set_wasm
@@ -93,6 +99,30 @@ sub req_header_echo_wasm {
 
 sub req_body_echo_wasm {
     return wasm_root() . "/wasm/http-guests/src/req_body_echo.wat";
+}
+
+sub shm_roundtrip_wasm {
+    return wasm_root() . "/wasm/http-guests/src/shm_roundtrip.wat";
+}
+
+sub shm_set_wasm {
+    return wasm_root() . "/wasm/http-guests/src/shm_set.wat";
+}
+
+sub shm_set_only_wasm {
+    return wasm_root() . "/wasm/http-guests/src/shm_set_only.wat";
+}
+
+sub shm_get_wasm {
+    return wasm_root() . "/wasm/http-guests/src/shm_get.wat";
+}
+
+sub shm_delete_wasm {
+    return wasm_root() . "/wasm/http-guests/src/shm_delete.wat";
+}
+
+sub shm_error_check_wasm {
+    return wasm_root() . "/wasm/http-guests/build/shm_error_check.wasm";
 }
 
 sub resp_header_set_wasm {
