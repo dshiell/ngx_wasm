@@ -52,6 +52,7 @@ ngx_module_incs="$ngx_addon_dir/include $WASMTIME_DIR/include"
 ngx_module_libs="$ngx_wasmtime_lib -lm"
 ngx_module_srcs="$ngx_addon_dir/src/ngx_http_wasm_module.c \
 $ngx_addon_dir/src/ngx_http_wasm_header_filter.c \
+$ngx_addon_dir/src/ngx_http_wasm_body_filter.c \
 $ngx_addon_dir/src/ngx_http_wasm_request_body.c \
 $ngx_addon_dir/src/ngx_http_wasm_abi.c \
 $ngx_addon_dir/src/ngx_http_wasm_runtime.c"

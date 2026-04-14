@@ -70,7 +70,7 @@ NGINX_CONFIGURE_ARGS = \
 	--with-ld-opt='$(SANITIZER_LD_FLAGS)' \
 	--add-module="$(CURDIR)"
 else
-NGINX_CONFIGURE_ARGS = --add-module="$(CURDIR)"
+NGINX_CONFIGURE_ARGS = --with-threads --add-module="$(CURDIR)"
 endif
 
 .PHONY: format check-format wasm deps nginx-build build start stop bench-ab smoke test test-reload clean
@@ -126,12 +126,12 @@ bench-ab:
 smoke:
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/smoke-content-by-wasm.sh
 
-test: wasm
+test: build
 	NGINX_DIR="$(NGINX_DIR)" \
 	./scripts/run-tests.sh
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
 
-test-reload: wasm
+test-reload: build
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
 
 clean:
