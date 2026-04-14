@@ -24,6 +24,8 @@ our @EXPORT_OK = qw(
     resp_header_echo_wasm
     resp_location_set_wasm
     resp_status_set_wasm
+    log_status_wasm
+    log_set_status_wasm
     resp_body_upper_wasm
     resp_body_append_eof_wasm
     resp_body_window_ab_to_x_wasm
@@ -107,6 +109,14 @@ sub resp_location_set_wasm {
 
 sub resp_status_set_wasm {
     return wasm_root() . "/wasm/http-guests/src/resp_status_set.wat";
+}
+
+sub log_status_wasm {
+    return wasm_root() . "/wasm/http-guests/src/log_status.wat";
+}
+
+sub log_set_status_wasm {
+    return wasm_root() . "/wasm/http-guests/src/log_set_status.wat";
 }
 
 sub resp_body_upper_wasm {

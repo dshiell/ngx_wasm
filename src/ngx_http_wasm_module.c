@@ -8,6 +8,7 @@
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_server_rewrite_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r);
+static ngx_int_t ngx_http_wasm_log_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
                                            ngx_http_wasm_ctx_t *ctx);
 static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
@@ -32,6 +33,8 @@ static char *
 ngx_http_wasm_header_filter_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_body_filter_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_log_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_wasm_request_body_buffer_size(ngx_conf_t *cf,
@@ -95,6 +98,14 @@ static ngx_command_t ngx_http_wasm_commands[] = {
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
          NGX_CONF_TAKE2,
      ngx_http_wasm_body_filter_by,
+     NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("log_by_wasm"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
+         NGX_CONF_TAKE2,
+     ngx_http_wasm_log_by,
      NGX_HTTP_LOC_CONF_OFFSET,
      0,
      NULL},
@@ -174,6 +185,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     conf->server_rewrite.set = NGX_CONF_UNSET;
     conf->header_filter.set = NGX_CONF_UNSET;
     conf->body_filter.set = NGX_CONF_UNSET;
+    conf->log.set = NGX_CONF_UNSET;
     conf->fuel_limit = NGX_CONF_UNSET_UINT;
     conf->timeslice_fuel = NGX_CONF_UNSET_UINT;
     conf->request_body_buffer_size = NGX_CONF_UNSET_SIZE;
@@ -208,6 +220,7 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
     ngx_http_wasm_merge_phase_conf(&parent->header_filter,
                                    &child->header_filter);
     ngx_http_wasm_merge_phase_conf(&parent->body_filter, &child->body_filter);
+    ngx_http_wasm_merge_phase_conf(&parent->log, &child->log);
 
     return NGX_CONF_OK;
 }
@@ -333,6 +346,13 @@ static ngx_int_t ngx_http_wasm_postconfiguration(ngx_conf_t *cf) {
     }
 
     *h = ngx_http_wasm_rewrite_handler;
+
+    h = ngx_array_push(&cmcf->phases[NGX_HTTP_LOG_PHASE].handlers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+
+    *h = ngx_http_wasm_log_handler;
 
     return NGX_OK;
 }
@@ -460,6 +480,23 @@ ngx_http_wasm_body_filter_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     wcf = conf;
 
     switch (ngx_http_wasm_configure_phase(cf, &wcf->body_filter)) {
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
+}
+
+static char *
+ngx_http_wasm_log_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+
+    (void)cmd;
+    wcf = conf;
+
+    switch (ngx_http_wasm_configure_phase(cf, &wcf->log)) {
         case NGX_OK:
             return NGX_CONF_OK;
         case NGX_DECLINED:
@@ -625,6 +662,56 @@ static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r) {
     return ngx_http_wasm_run_phase(r, wcf, &wcf->rewrite, &phase_name);
 }
 
+static ngx_int_t ngx_http_wasm_log_handler(ngx_http_request_t *r) {
+    static ngx_str_t phase_name = ngx_string("log");
+    ngx_http_wasm_conf_t *wcf;
+    ngx_http_wasm_ctx_t *ctx;
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_int_t rc;
+
+    if (r != r->main) {
+        return NGX_OK;
+    }
+
+    wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
+    wmcf = ngx_http_get_module_main_conf(r, ngx_http_wasm_module);
+
+    if (wcf == NULL || wcf->log.set != 1 || wmcf == NULL ||
+        wmcf->runtime == NULL) {
+        return NGX_OK;
+    }
+
+    ngx_log_error(NGX_LOG_NOTICE,
+                  r->connection->log,
+                  0,
+                  "ngx_wasm: %V handler module=\"%V\" export=\"%V\"",
+                  &phase_name,
+                  &wcf->log.module_path,
+                  &wcf->log.export_name);
+
+    ctx = ngx_http_wasm_get_or_create_ctx(r, wcf, wmcf, &wcf->log);
+    if (ctx == NULL || !ctx->log_exec_set) {
+        ngx_log_error(NGX_LOG_ERR,
+                      r->connection->log,
+                      0,
+                      "ngx_wasm: failed to initialize log phase context");
+        return NGX_OK;
+    }
+
+    rc = ngx_http_wasm_runtime_run(&ctx->log_exec);
+    if (rc == NGX_AGAIN) {
+        ngx_log_error(NGX_LOG_ERR,
+                      r->connection->log,
+                      0,
+                      "ngx_wasm: log_by_wasm does not support suspension");
+    }
+
+    ngx_http_wasm_runtime_cleanup_exec_ctx(&ctx->log_exec);
+    ctx->log_exec_set = 0;
+
+    return NGX_OK;
+}
+
 static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
                                          ngx_http_wasm_conf_t *wcf,
                                          ngx_http_wasm_phase_conf_t *phase,
@@ -682,6 +769,18 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_wasm_module);
     if (ctx != NULL) {
+        if (phase == &wcf->log && wcf->log.set == 1 && !ctx->log_exec_set) {
+            ngx_http_wasm_runtime_init_exec_ctx(&ctx->log_exec,
+                                                r,
+                                                &wcf->log,
+                                                NGX_HTTP_WASM_PHASE_LOG,
+                                                wmcf->runtime);
+            ctx->log_exec.fuel_limit = wcf->fuel_limit;
+            ctx->log_exec.timeslice_fuel = 0;
+            ctx->log_exec.fuel_remaining = wcf->fuel_limit;
+            ctx->log_exec_set = 1;
+        }
+
         return ctx;
     }
 
@@ -733,6 +832,19 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
         ctx->exec.fuel_limit = wcf->fuel_limit;
         ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
         ctx->exec.fuel_remaining = wcf->fuel_limit;
+        return ctx;
+    }
+
+    if (phase == &wcf->log && wcf->log.set == 1) {
+        ngx_http_wasm_runtime_init_exec_ctx(&ctx->log_exec,
+                                            r,
+                                            &wcf->log,
+                                            NGX_HTTP_WASM_PHASE_LOG,
+                                            wmcf->runtime);
+        ctx->log_exec.fuel_limit = wcf->fuel_limit;
+        ctx->log_exec.timeslice_fuel = 0;
+        ctx->log_exec.fuel_remaining = wcf->fuel_limit;
+        ctx->log_exec_set = 1;
         return ctx;
     }
 
