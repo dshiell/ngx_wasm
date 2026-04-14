@@ -126,12 +126,12 @@ bench-ab:
 smoke:
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/smoke-content-by-wasm.sh
 
-test: wasm
+test: build
 	NGINX_DIR="$(NGINX_DIR)" \
 	./scripts/run-tests.sh
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
 
-test-reload: wasm
+test-reload: build
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
 
 clean:
