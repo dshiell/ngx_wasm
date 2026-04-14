@@ -30,6 +30,7 @@
 #define NGX_HTTP_WASM_ABI_CAP_YIELD 0x0040
 #define NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_READ 0x0080
 #define NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_WRITE 0x0100
+#define NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_GET 0x0200
 
 typedef struct {
     ngx_http_request_t *request;
@@ -61,6 +62,7 @@ ngx_int_t ngx_http_wasm_abi_log(ngx_http_wasm_abi_ctx_t *ctx,
                                 size_t len);
 ngx_int_t ngx_http_wasm_abi_resp_set_status(ngx_http_wasm_abi_ctx_t *ctx,
                                             ngx_int_t status);
+ngx_int_t ngx_http_wasm_abi_resp_get_status(ngx_http_wasm_abi_ctx_t *ctx);
 ngx_int_t ngx_http_wasm_abi_req_set_header(ngx_http_wasm_abi_ctx_t *ctx,
                                            const u_char *name,
                                            size_t name_len,

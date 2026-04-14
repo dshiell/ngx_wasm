@@ -10,8 +10,10 @@ struct ngx_http_wasm_ctx_s {
     ngx_http_wasm_exec_ctx_t exec;
     ngx_http_wasm_exec_ctx_t header_filter_exec;
     ngx_http_wasm_exec_ctx_t body_filter_exec;
+    ngx_http_wasm_exec_ctx_t log_exec;
     ngx_uint_t header_filter_exec_set;
     ngx_uint_t body_filter_exec_set;
+    ngx_uint_t log_exec_set;
     ngx_uint_t waiting;
     ngx_uint_t request_body_reading;
     ngx_uint_t request_body_ready;

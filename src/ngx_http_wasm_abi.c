@@ -404,6 +404,15 @@ ngx_int_t ngx_http_wasm_abi_resp_set_status(ngx_http_wasm_abi_ctx_t *ctx,
     return NGX_HTTP_WASM_OK;
 }
 
+ngx_int_t ngx_http_wasm_abi_resp_get_status(ngx_http_wasm_abi_ctx_t *ctx) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_GET) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ctx->request->headers_out.status;
+}
+
 ngx_int_t ngx_http_wasm_abi_req_set_header(ngx_http_wasm_abi_ctx_t *ctx,
                                            const u_char *name,
                                            size_t name_len,
