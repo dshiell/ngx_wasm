@@ -1,6 +1,10 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#if (NGX_HTTP_SSL)
+#include <ngx_event_openssl.h>
+#include <ngx_http_ssl_module.h>
+#endif
 
 #include <ngx_http_wasm_module_int.h>
 #include <ngx_http_wasm_runtime.h>
@@ -35,6 +39,12 @@ static char *
 ngx_http_wasm_body_filter_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_log_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_wasm_ssl_client_hello_by(ngx_conf_t *cf,
+                                               ngx_command_t *cmd,
+                                               void *conf);
+static char *ngx_http_wasm_ssl_certificate_by(ngx_conf_t *cf,
+                                              ngx_command_t *cmd,
+                                              void *conf);
 static char *
 ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_wasm_request_body_buffer_size(ngx_conf_t *cf,
@@ -49,6 +59,12 @@ static char *
 ngx_http_wasm_timeslice_fuel(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_wasm_install_content_handler(ngx_conf_t *cf);
 static ngx_int_t ngx_http_wasm_postconfiguration(ngx_conf_t *cf);
+#if (NGX_HTTP_SSL)
+static ngx_int_t ngx_http_wasm_ssl_init(ngx_conf_t *cf);
+static int
+ngx_http_wasm_ssl_servername(ngx_ssl_conn_t *ssl_conn, int *ad, void *arg);
+static int ngx_http_wasm_ssl_certificate(ngx_ssl_conn_t *ssl_conn, void *arg);
+#endif
 static ngx_int_t ngx_http_wasm_init_module(ngx_cycle_t *cycle);
 static ngx_int_t ngx_http_wasm_init_process(ngx_cycle_t *cycle);
 static void ngx_http_wasm_exit_process(ngx_cycle_t *cycle);
@@ -107,6 +123,20 @@ static ngx_command_t ngx_http_wasm_commands[] = {
          NGX_CONF_TAKE2,
      ngx_http_wasm_log_by,
      NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("ssl_client_hello_by_wasm"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_CONF_TAKE2,
+     ngx_http_wasm_ssl_client_hello_by,
+     NGX_HTTP_SRV_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("ssl_certificate_by_wasm"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_CONF_TAKE2,
+     ngx_http_wasm_ssl_certificate_by,
+     NGX_HTTP_SRV_CONF_OFFSET,
      0,
      NULL},
 
@@ -186,6 +216,8 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     conf->header_filter.set = NGX_CONF_UNSET;
     conf->body_filter.set = NGX_CONF_UNSET;
     conf->log.set = NGX_CONF_UNSET;
+    conf->ssl_client_hello.set = NGX_CONF_UNSET;
+    conf->ssl_certificate.set = NGX_CONF_UNSET;
     conf->fuel_limit = NGX_CONF_UNSET_UINT;
     conf->timeslice_fuel = NGX_CONF_UNSET_UINT;
     conf->request_body_buffer_size = NGX_CONF_UNSET_SIZE;
@@ -221,6 +253,10 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
                                    &child->header_filter);
     ngx_http_wasm_merge_phase_conf(&parent->body_filter, &child->body_filter);
     ngx_http_wasm_merge_phase_conf(&parent->log, &child->log);
+    ngx_http_wasm_merge_phase_conf(&parent->ssl_client_hello,
+                                   &child->ssl_client_hello);
+    ngx_http_wasm_merge_phase_conf(&parent->ssl_certificate,
+                                   &child->ssl_certificate);
 
     return NGX_CONF_OK;
 }
@@ -353,6 +389,12 @@ static ngx_int_t ngx_http_wasm_postconfiguration(ngx_conf_t *cf) {
     }
 
     *h = ngx_http_wasm_log_handler;
+
+#if (NGX_HTTP_SSL)
+    if (ngx_http_wasm_ssl_init(cf) != NGX_OK) {
+        return NGX_ERROR;
+    }
+#endif
 
     return NGX_OK;
 }
@@ -497,6 +539,42 @@ ngx_http_wasm_log_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     wcf = conf;
 
     switch (ngx_http_wasm_configure_phase(cf, &wcf->log)) {
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
+}
+
+static char *ngx_http_wasm_ssl_client_hello_by(ngx_conf_t *cf,
+                                               ngx_command_t *cmd,
+                                               void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+
+    (void)cmd;
+    wcf = conf;
+
+    switch (ngx_http_wasm_configure_phase(cf, &wcf->ssl_client_hello)) {
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
+}
+
+static char *ngx_http_wasm_ssl_certificate_by(ngx_conf_t *cf,
+                                              ngx_command_t *cmd,
+                                              void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+
+    (void)cmd;
+    wcf = conf;
+
+    switch (ngx_http_wasm_configure_phase(cf, &wcf->ssl_certificate)) {
         case NGX_OK:
             return NGX_CONF_OK;
         case NGX_DECLINED:
@@ -711,6 +789,180 @@ static ngx_int_t ngx_http_wasm_log_handler(ngx_http_request_t *r) {
 
     return NGX_OK;
 }
+
+#if (NGX_HTTP_SSL)
+static ngx_int_t ngx_http_wasm_ssl_init(ngx_conf_t *cf) {
+    static ngx_ssl_client_hello_arg cb = {ngx_http_wasm_ssl_servername};
+    ngx_http_core_main_conf_t *cmcf;
+    ngx_http_core_srv_conf_t **cscfp;
+    ngx_http_ssl_srv_conf_t *sscf;
+    ngx_http_wasm_conf_t *wcf;
+    ngx_uint_t s;
+
+    cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+    cscfp = cmcf->servers.elts;
+
+    for (s = 0; s < cmcf->servers.nelts; s++) {
+        wcf = cscfp[s]->ctx->srv_conf[ngx_http_wasm_module.ctx_index];
+        sscf = cscfp[s]->ctx->srv_conf[ngx_http_ssl_module.ctx_index];
+
+        if (wcf == NULL || sscf == NULL || sscf->ssl.ctx == NULL) {
+            continue;
+        }
+
+        if (wcf->ssl_client_hello.set == 1) {
+            if (ngx_ssl_set_client_hello_callback(&sscf->ssl, &cb) != NGX_OK) {
+                return NGX_ERROR;
+            }
+
+            if (SSL_CTX_set_tlsext_servername_callback(
+                    sscf->ssl.ctx, ngx_http_wasm_ssl_servername) == 0) {
+                ngx_conf_log_error(
+                    NGX_LOG_WARN,
+                    cf,
+                    0,
+                    "nginx was built with SNI support, but the linked OpenSSL "
+                    "library has no tlsext support");
+            }
+        }
+
+        if (wcf->ssl_certificate.set == 1) {
+#ifdef SSL_R_CERT_CB_ERROR
+            SSL_CTX_set_cert_cb(
+                sscf->ssl.ctx, ngx_http_wasm_ssl_certificate, NULL);
+#else
+            ngx_conf_log_error(NGX_LOG_EMERG,
+                               cf,
+                               0,
+                               "\"ssl_certificate_by_wasm\" is not supported "
+                               "on this platform");
+            return NGX_ERROR;
+#endif
+        }
+    }
+
+    return NGX_OK;
+}
+
+static int
+ngx_http_wasm_ssl_servername(ngx_ssl_conn_t *ssl_conn, int *ad, void *arg) {
+    ngx_connection_t *c;
+    ngx_http_connection_t *hc;
+    ngx_http_wasm_conf_t *wcf;
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_http_wasm_exec_ctx_t exec;
+    ngx_int_t rc;
+
+    rc = ngx_http_ssl_servername(ssl_conn, ad, arg);
+    if (rc != SSL_TLSEXT_ERR_OK) {
+        return rc;
+    }
+
+    c = ngx_ssl_get_connection(ssl_conn);
+    hc = c->data;
+    if (hc == NULL || hc->conf_ctx == NULL) {
+        return SSL_TLSEXT_ERR_OK;
+    }
+
+    wcf = ngx_http_get_module_srv_conf(hc->conf_ctx, ngx_http_wasm_module);
+    wmcf = ngx_http_get_module_main_conf(hc->conf_ctx, ngx_http_wasm_module);
+    if (wcf == NULL || wmcf == NULL || wmcf->runtime == NULL ||
+        wcf->ssl_client_hello.set != 1) {
+        return SSL_TLSEXT_ERR_OK;
+    }
+
+    ngx_log_error(
+        NGX_LOG_NOTICE,
+        c->log,
+        0,
+        "ngx_wasm: ssl client hello handler module=\"%V\" export=\"%V\"",
+        &wcf->ssl_client_hello.module_path,
+        &wcf->ssl_client_hello.export_name);
+
+    ngx_http_wasm_runtime_init_ssl_exec_ctx(
+        &exec,
+        c,
+        ssl_conn,
+        &wcf->ssl_client_hello,
+        NGX_HTTP_WASM_PHASE_SSL_CLIENT_HELLO,
+        wmcf->runtime);
+    exec.fuel_limit = wcf->fuel_limit;
+    exec.timeslice_fuel = 0;
+    exec.fuel_remaining = wcf->fuel_limit;
+
+    rc = ngx_http_wasm_runtime_run(&exec);
+    ngx_http_wasm_runtime_cleanup_exec_ctx(&exec);
+
+    if (rc != NGX_OK) {
+        *ad = SSL_AD_INTERNAL_ERROR;
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+
+    if (exec.abi.ssl_handshake_rejected) {
+        c->ssl->handshake_rejected = 1;
+        *ad = exec.abi.ssl_handshake_alert;
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+
+    return SSL_TLSEXT_ERR_OK;
+}
+
+static int ngx_http_wasm_ssl_certificate(ngx_ssl_conn_t *ssl_conn, void *arg) {
+    ngx_connection_t *c;
+    ngx_http_connection_t *hc;
+    ngx_http_wasm_conf_t *wcf;
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_http_wasm_exec_ctx_t exec;
+    ngx_int_t rc;
+
+    (void)arg;
+
+    c = ngx_ssl_get_connection(ssl_conn);
+    hc = c->data;
+    if (hc == NULL || hc->conf_ctx == NULL) {
+        return 0;
+    }
+
+    wcf = ngx_http_get_module_srv_conf(hc->conf_ctx, ngx_http_wasm_module);
+    wmcf = ngx_http_get_module_main_conf(hc->conf_ctx, ngx_http_wasm_module);
+    if (wcf == NULL || wmcf == NULL || wmcf->runtime == NULL ||
+        wcf->ssl_certificate.set != 1) {
+        return 0;
+    }
+
+    ngx_log_error(
+        NGX_LOG_NOTICE,
+        c->log,
+        0,
+        "ngx_wasm: ssl certificate handler module=\"%V\" export=\"%V\"",
+        &wcf->ssl_certificate.module_path,
+        &wcf->ssl_certificate.export_name);
+
+    ngx_http_wasm_runtime_init_ssl_exec_ctx(&exec,
+                                            c,
+                                            ssl_conn,
+                                            &wcf->ssl_certificate,
+                                            NGX_HTTP_WASM_PHASE_SSL_CERTIFICATE,
+                                            wmcf->runtime);
+    exec.fuel_limit = wcf->fuel_limit;
+    exec.timeslice_fuel = 0;
+    exec.fuel_remaining = wcf->fuel_limit;
+
+    rc = ngx_http_wasm_runtime_run(&exec);
+    ngx_http_wasm_runtime_cleanup_exec_ctx(&exec);
+
+    if (rc != NGX_OK) {
+        return 0;
+    }
+
+    if (exec.abi.ssl_handshake_rejected) {
+        c->ssl->handshake_rejected = 1;
+        return 0;
+    }
+
+    return 1;
+}
+#endif
 
 static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
                                          ngx_http_wasm_conf_t *wcf,

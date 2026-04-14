@@ -1,4 +1,7 @@
 #include <ngx_http_wasm_abi.h>
+#if (NGX_HTTP_SSL)
+#include <openssl/pem.h>
+#endif
 
 static ngx_table_elt_t *ngx_http_wasm_abi_find_header(ngx_http_request_t *r,
                                                       const u_char *name,
@@ -11,6 +14,7 @@ static ngx_int_t ngx_http_wasm_abi_copy_bytes(ngx_http_request_t *r,
                                               size_t len);
 static ngx_int_t ngx_http_wasm_abi_require(ngx_http_wasm_abi_ctx_t *ctx,
                                            ngx_uint_t capability);
+static ngx_log_t *ngx_http_wasm_abi_log_target(ngx_http_wasm_abi_ctx_t *ctx);
 static ngx_uint_t ngx_http_wasm_abi_header_eq(const u_char *name,
                                               size_t name_len,
                                               const char *literal);
@@ -57,13 +61,22 @@ static ngx_int_t ngx_http_wasm_abi_set_str(ngx_http_wasm_abi_ctx_t *ctx,
 
 void ngx_http_wasm_abi_init(ngx_http_wasm_abi_ctx_t *ctx,
                             ngx_http_request_t *r,
+#if (NGX_HTTP_SSL)
+                            ngx_ssl_conn_t *ssl_conn,
+#endif
+                            ngx_connection_t *c,
                             ngx_uint_t capabilities) {
     ngx_memzero(ctx, sizeof(*ctx));
 
     ctx->request = r;
+#if (NGX_HTTP_SSL)
+    ctx->ssl_conn = ssl_conn;
+#endif
+    ctx->connection = c;
     ctx->abi_version = NGX_HTTP_WASM_ABI_VERSION;
     ctx->capabilities = capabilities;
     ctx->status = NGX_HTTP_OK;
+    ctx->ssl_handshake_alert = SSL_AD_HANDSHAKE_FAILURE;
 }
 
 static ngx_int_t ngx_http_wasm_abi_require(ngx_http_wasm_abi_ctx_t *ctx,
@@ -73,6 +86,18 @@ static ngx_int_t ngx_http_wasm_abi_require(ngx_http_wasm_abi_ctx_t *ctx,
     }
 
     return NGX_HTTP_WASM_OK;
+}
+
+static ngx_log_t *ngx_http_wasm_abi_log_target(ngx_http_wasm_abi_ctx_t *ctx) {
+    if (ctx->request != NULL) {
+        return ctx->request->connection->log;
+    }
+
+    if (ctx->connection != NULL) {
+        return ctx->connection->log;
+    }
+
+    return ngx_cycle->log;
 }
 
 static ngx_uint_t ngx_http_wasm_abi_header_eq(const u_char *name,
@@ -305,7 +330,7 @@ ngx_int_t ngx_http_wasm_abi_log(ngx_http_wasm_abi_ctx_t *ctx,
                                 const u_char *data,
                                 size_t len) {
     ngx_log_error(level,
-                  ctx->request->connection->log,
+                  ngx_http_wasm_abi_log_target(ctx),
                   0,
                   "ngx_wasm guest: \"%*s\"",
                   (int)len,
@@ -412,6 +437,114 @@ ngx_int_t ngx_http_wasm_abi_resp_get_status(ngx_http_wasm_abi_ctx_t *ctx) {
 
     return ctx->request->headers_out.status;
 }
+
+#if (NGX_HTTP_SSL)
+ngx_int_t ngx_http_wasm_abi_ssl_get_server_name(ngx_http_wasm_abi_ctx_t *ctx,
+                                                u_char *buf,
+                                                size_t buf_len) {
+    const char *servername;
+    size_t copy_len, len;
+
+    if (ngx_http_wasm_abi_require(ctx,
+                                  NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ctx->ssl_conn == NULL) {
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    servername = SSL_get_servername(ctx->ssl_conn, TLSEXT_NAMETYPE_host_name);
+    if (servername == NULL) {
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    len = ngx_strlen(servername);
+    copy_len = ngx_min(len, buf_len);
+    if (copy_len != 0) {
+        ngx_memcpy(buf, servername, copy_len);
+    }
+
+    return (ngx_int_t)len;
+}
+
+ngx_int_t ngx_http_wasm_abi_ssl_reject_handshake(ngx_http_wasm_abi_ctx_t *ctx,
+                                                 ngx_int_t alert) {
+    if (ngx_http_wasm_abi_require(ctx,
+                                  NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ctx->ssl_handshake_rejected = 1;
+    ctx->ssl_handshake_alert = alert;
+
+    return NGX_HTTP_WASM_OK;
+}
+
+ngx_int_t ngx_http_wasm_abi_ssl_set_certificate(ngx_http_wasm_abi_ctx_t *ctx,
+                                                const u_char *cert,
+                                                size_t cert_len,
+                                                const u_char *key,
+                                                size_t key_len) {
+    BIO *cert_bio, *key_bio;
+    X509 *x509;
+    EVP_PKEY *pkey;
+
+    if (ngx_http_wasm_abi_require(ctx,
+                                  NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ctx->ssl_conn == NULL || cert_len == 0 || key_len == 0) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    cert_bio = BIO_new_mem_buf((void *)cert, (int)cert_len);
+    if (cert_bio == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    x509 = PEM_read_bio_X509_AUX(cert_bio, NULL, NULL, NULL);
+    BIO_free(cert_bio);
+    if (x509 == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (SSL_use_certificate(ctx->ssl_conn, x509) != 1) {
+        X509_free(x509);
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    X509_free(x509);
+
+    key_bio = BIO_new_mem_buf((void *)key, (int)key_len);
+    if (key_bio == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    pkey = PEM_read_bio_PrivateKey(key_bio, NULL, NULL, NULL);
+    BIO_free(key_bio);
+    if (pkey == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (SSL_use_PrivateKey(ctx->ssl_conn, pkey) != 1) {
+        EVP_PKEY_free(pkey);
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    EVP_PKEY_free(pkey);
+
+    if (SSL_check_private_key(ctx->ssl_conn) != 1) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return NGX_HTTP_WASM_OK;
+}
+#endif
 
 ngx_int_t ngx_http_wasm_abi_req_set_header(ngx_http_wasm_abi_ctx_t *ctx,
                                            const u_char *name,

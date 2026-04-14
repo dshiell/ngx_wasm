@@ -32,6 +32,12 @@ RUSTUP ?= $(shell \
 		command -v rustup; \
 	fi)
 WASM_TARGET ?= wasm32-unknown-unknown
+OPENSSL_PREFIX ?= $(shell \
+	if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists openssl 2>/dev/null; then \
+		pkg-config --variable=prefix openssl; \
+	elif command -v brew >/dev/null 2>&1; then \
+		brew --prefix openssl@3 2>/dev/null || true; \
+	fi)
 BUILD_SANITIZE ?= 0
 SANITIZER_CC ?= clang
 SANITIZER_IGNORELIST ?= $(CURDIR)/sanitizers/ubsan.ignorelist
@@ -63,14 +69,28 @@ BENCH_AB_ENDPOINTS ?= hello health
 BENCH_AB_KEEPALIVE ?= 1
 BENCH_AB_OUTPUT_DIR ?= $(BENCH_AB_RUN_DIR)/benchmarks
 
+ifneq ($(strip $(OPENSSL_PREFIX)),)
+NGINX_SSL_INCLUDE_OPT = -I$(OPENSSL_PREFIX)/include
+NGINX_SSL_LIB_OPT = -L$(OPENSSL_PREFIX)/lib
+else
+NGINX_SSL_INCLUDE_OPT =
+NGINX_SSL_LIB_OPT =
+endif
+
 ifeq ($(BUILD_SANITIZE),1)
 NGINX_CONFIGURE_ARGS = \
+	--with-http_ssl_module \
 	--with-cc="$(SANITIZER_CC)" \
-	--with-cc-opt='$(SANITIZER_CC_FLAGS)' \
-	--with-ld-opt='$(SANITIZER_LD_FLAGS)' \
+	--with-cc-opt='$(SANITIZER_CC_FLAGS) $(NGINX_SSL_INCLUDE_OPT)' \
+	--with-ld-opt='$(SANITIZER_LD_FLAGS) $(NGINX_SSL_LIB_OPT)' \
 	--add-module="$(CURDIR)"
 else
-NGINX_CONFIGURE_ARGS = --with-threads --add-module="$(CURDIR)"
+NGINX_CONFIGURE_ARGS = \
+	--with-threads \
+	--with-http_ssl_module \
+	--with-cc-opt='$(NGINX_SSL_INCLUDE_OPT)' \
+	--with-ld-opt='$(NGINX_SSL_LIB_OPT)' \
+	--add-module="$(CURDIR)"
 endif
 
 .PHONY: format check-format wasm deps nginx-build build start stop bench-ab smoke test test-reload clean
@@ -129,6 +149,7 @@ smoke:
 test: build
 	NGINX_DIR="$(NGINX_DIR)" \
 	./scripts/run-tests.sh
+	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-ssl-hooks.sh
 	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
 
 test-reload: build

@@ -4,6 +4,9 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#if (NGX_HTTP_SSL)
+#include <ngx_event_openssl.h>
+#endif
 
 #include <ngx_http_wasm_abi.h>
 
@@ -38,6 +41,8 @@ typedef enum {
     NGX_HTTP_WASM_PHASE_HEADER_FILTER,
     NGX_HTTP_WASM_PHASE_BODY_FILTER,
     NGX_HTTP_WASM_PHASE_LOG,
+    NGX_HTTP_WASM_PHASE_SSL_CLIENT_HELLO,
+    NGX_HTTP_WASM_PHASE_SSL_CERTIFICATE,
 } ngx_http_wasm_phase_e;
 
 struct ngx_http_wasm_phase_conf_s {
@@ -63,10 +68,16 @@ typedef struct {
     ngx_http_wasm_phase_conf_t header_filter;
     ngx_http_wasm_phase_conf_t body_filter;
     ngx_http_wasm_phase_conf_t log;
+    ngx_http_wasm_phase_conf_t ssl_client_hello;
+    ngx_http_wasm_phase_conf_t ssl_certificate;
 } ngx_http_wasm_conf_t;
 
 typedef struct {
     ngx_http_request_t *request;
+    ngx_connection_t *connection;
+#if (NGX_HTTP_SSL)
+    ngx_ssl_conn_t *ssl_connection;
+#endif
     ngx_http_wasm_phase_conf_t *conf;
     ngx_http_wasm_runtime_state_t *runtime;
     ngx_http_wasm_abi_ctx_t abi;
@@ -96,6 +107,15 @@ void ngx_http_wasm_runtime_init_exec_ctx(
     ngx_http_wasm_phase_conf_t *conf,
     ngx_http_wasm_phase_e phase_kind,
     ngx_http_wasm_runtime_state_t *runtime);
+#if (NGX_HTTP_SSL)
+void ngx_http_wasm_runtime_init_ssl_exec_ctx(
+    ngx_http_wasm_exec_ctx_t *ctx,
+    ngx_connection_t *c,
+    ngx_ssl_conn_t *ssl_conn,
+    ngx_http_wasm_phase_conf_t *conf,
+    ngx_http_wasm_phase_e phase_kind,
+    ngx_http_wasm_runtime_state_t *runtime);
+#endif
 void ngx_http_wasm_runtime_cleanup_exec_ctx(ngx_http_wasm_exec_ctx_t *ctx);
 ngx_int_t ngx_http_wasm_runtime_run(ngx_http_wasm_exec_ctx_t *ctx);
 
