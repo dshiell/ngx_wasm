@@ -42,6 +42,9 @@
 #define NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET 0x1000
 #define NGX_HTTP_WASM_ABI_CAP_SHARED_KV 0x2000
 #define NGX_HTTP_WASM_ABI_CAP_METRICS 0x4000
+#define NGX_HTTP_WASM_ABI_CAP_SUBREQUEST 0x8000
+
+#define NGX_HTTP_WASM_SUBREQ_CAPTURE_BODY 0x0001
 
 typedef struct {
     ngx_http_request_t *request;
@@ -172,6 +175,29 @@ ngx_int_t ngx_http_wasm_abi_resp_write(ngx_http_wasm_abi_ctx_t *ctx,
                                        const u_char *data,
                                        size_t len,
                                        ngx_uint_t copy);
+ngx_int_t ngx_http_wasm_abi_subrequest_set_header(ngx_http_wasm_abi_ctx_t *ctx,
+                                                  const u_char *name,
+                                                  size_t name_len,
+                                                  const u_char *value,
+                                                  size_t value_len);
+ngx_int_t ngx_http_wasm_abi_subrequest(ngx_http_wasm_abi_ctx_t *ctx,
+                                       const u_char *uri,
+                                       size_t uri_len,
+                                       const u_char *args,
+                                       size_t args_len,
+                                       ngx_int_t method,
+                                       ngx_uint_t options);
+ngx_int_t ngx_http_wasm_abi_subrequest_get_status(ngx_http_wasm_abi_ctx_t *ctx);
+ngx_int_t ngx_http_wasm_abi_subrequest_get_header(ngx_http_wasm_abi_ctx_t *ctx,
+                                                  const u_char *name,
+                                                  size_t name_len,
+                                                  u_char *buf,
+                                                  size_t buf_len);
+ngx_int_t ngx_http_wasm_abi_subrequest_get_body(ngx_http_wasm_abi_ctx_t *ctx,
+                                                u_char *buf,
+                                                size_t buf_len);
+ngx_int_t
+ngx_http_wasm_abi_subrequest_get_body_len(ngx_http_wasm_abi_ctx_t *ctx);
 ngx_int_t ngx_http_wasm_abi_send_response(ngx_http_wasm_abi_ctx_t *ctx);
 
 #endif /* _NGX_HTTP_WASM_ABI_H_INCLUDED_ */

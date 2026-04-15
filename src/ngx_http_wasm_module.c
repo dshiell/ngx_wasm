@@ -18,6 +18,14 @@ static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_log_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
                                            ngx_http_wasm_ctx_t *ctx);
+static void
+ngx_http_wasm_init_request_exec(ngx_http_wasm_ctx_t *ctx,
+                                ngx_http_request_t *r,
+                                ngx_http_wasm_phase_conf_t *phase,
+                                ngx_http_wasm_phase_e phase_kind,
+                                ngx_http_wasm_runtime_state_t *runtime,
+                                ngx_uint_t fuel_limit,
+                                ngx_uint_t timeslice_fuel);
 static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
                                          ngx_http_wasm_conf_t *wcf,
                                          ngx_http_wasm_phase_conf_t *phase,
@@ -53,6 +61,9 @@ ngx_http_wasm_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_wasm_request_body_buffer_size(ngx_conf_t *cf,
                                                     ngx_command_t *cmd,
                                                     void *conf);
+static char *ngx_http_wasm_subrequest_buffer_size(ngx_conf_t *cf,
+                                                  ngx_command_t *cmd,
+                                                  void *conf);
 static char *
 ngx_http_wasm_shm_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
@@ -213,6 +224,14 @@ static ngx_command_t ngx_http_wasm_commands[] = {
      0,
      NULL},
 
+    {ngx_string("wasm_subrequest_buffer_size"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
+         NGX_CONF_TAKE1,
+     ngx_http_wasm_subrequest_buffer_size,
+     NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
     {ngx_string("wasm_timeslice_fuel"),
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
          NGX_CONF_TAKE1,
@@ -271,6 +290,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     conf->timeslice_fuel = NGX_CONF_UNSET_UINT;
     conf->request_body_buffer_size = NGX_CONF_UNSET_SIZE;
     conf->body_filter_file_chunk_size = NGX_CONF_UNSET_SIZE;
+    conf->subrequest_buffer_size = NGX_CONF_UNSET_SIZE;
     conf->metrics_endpoint = NGX_CONF_UNSET;
 
     return conf;
@@ -294,6 +314,9 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
         child->body_filter_file_chunk_size,
         parent->body_filter_file_chunk_size,
         NGX_HTTP_WASM_DEFAULT_BODY_FILTER_FILE_CHUNK_SIZE);
+    ngx_conf_merge_size_value(child->subrequest_buffer_size,
+                              parent->subrequest_buffer_size,
+                              NGX_HTTP_WASM_DEFAULT_SUBREQUEST_BUFFER_SIZE);
     ngx_conf_merge_value(child->metrics_endpoint, parent->metrics_endpoint, 0);
 
     ngx_http_wasm_merge_phase_conf(&parent->content, &child->content);
@@ -842,6 +865,32 @@ static char *ngx_http_wasm_body_filter_file_chunk_size(ngx_conf_t *cf,
     return NGX_CONF_OK;
 }
 
+static char *ngx_http_wasm_subrequest_buffer_size(ngx_conf_t *cf,
+                                                  ngx_command_t *cmd,
+                                                  void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+    ngx_str_t *value;
+    off_t size;
+
+    (void)cmd;
+    wcf = conf;
+
+    value = cf->args->elts;
+    size = ngx_parse_size(&value[1]);
+    if (size == NGX_ERROR || size < 0) {
+        ngx_conf_log_error(NGX_LOG_EMERG,
+                           cf,
+                           0,
+                           "invalid wasm_subrequest_buffer_size value \"%V\"",
+                           &value[1]);
+        return NGX_CONF_ERROR;
+    }
+
+    wcf->subrequest_buffer_size = (size_t)size;
+
+    return NGX_CONF_OK;
+}
+
 static char *
 ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_http_wasm_conf_t *wcf;
@@ -1262,6 +1311,11 @@ static ngx_int_t ngx_http_wasm_run_phase(ngx_http_request_t *r,
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
+    if (ctx->exec_completed &&
+        (phase == &wcf->rewrite || phase == &wcf->server_rewrite)) {
+        return NGX_DECLINED;
+    }
+
     rc = ngx_http_wasm_prepare_request_body(r, wcf, ctx);
     if (rc != NGX_OK) {
         if (rc == NGX_DONE && ctx->request_body_async) {
@@ -1296,6 +1350,36 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
             ctx->log_exec_set = 1;
         }
 
+        if (ctx->exec_completed && ctx->exec.conf != phase) {
+            if (phase == &wcf->rewrite && wcf->rewrite.set == 1) {
+                ngx_http_wasm_init_request_exec(ctx,
+                                                r,
+                                                &wcf->rewrite,
+                                                NGX_HTTP_WASM_PHASE_REWRITE,
+                                                wmcf->runtime,
+                                                wcf->fuel_limit,
+                                                wcf->timeslice_fuel);
+            } else if (phase == &wcf->server_rewrite &&
+                       wcf->server_rewrite.set == 1) {
+                ngx_http_wasm_init_request_exec(
+                    ctx,
+                    r,
+                    &wcf->server_rewrite,
+                    NGX_HTTP_WASM_PHASE_SERVER_REWRITE,
+                    wmcf->runtime,
+                    wcf->fuel_limit,
+                    wcf->timeslice_fuel);
+            } else if (phase == &wcf->content && wcf->content.set == 1) {
+                ngx_http_wasm_init_request_exec(ctx,
+                                                r,
+                                                &wcf->content,
+                                                NGX_HTTP_WASM_PHASE_CONTENT,
+                                                wmcf->runtime,
+                                                wcf->fuel_limit,
+                                                wcf->timeslice_fuel);
+            }
+        }
+
         return ctx;
     }
 
@@ -1303,6 +1387,8 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
     if (ctx == NULL) {
         return NULL;
     }
+
+    ctx->subrequest.request = r;
 
     ngx_http_set_ctx(r, ctx, ngx_http_wasm_module);
 
@@ -1315,38 +1401,35 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
     cln->data = ctx;
 
     if (phase == &wcf->rewrite && wcf->rewrite.set == 1) {
-        ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec,
-                                            r,
-                                            &wcf->rewrite,
-                                            NGX_HTTP_WASM_PHASE_REWRITE,
-                                            wmcf->runtime);
-        ctx->exec.fuel_limit = wcf->fuel_limit;
-        ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
-        ctx->exec.fuel_remaining = wcf->fuel_limit;
+        ngx_http_wasm_init_request_exec(ctx,
+                                        r,
+                                        &wcf->rewrite,
+                                        NGX_HTTP_WASM_PHASE_REWRITE,
+                                        wmcf->runtime,
+                                        wcf->fuel_limit,
+                                        wcf->timeslice_fuel);
         return ctx;
     }
 
     if (phase == &wcf->server_rewrite && wcf->server_rewrite.set == 1) {
-        ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec,
-                                            r,
-                                            &wcf->server_rewrite,
-                                            NGX_HTTP_WASM_PHASE_SERVER_REWRITE,
-                                            wmcf->runtime);
-        ctx->exec.fuel_limit = wcf->fuel_limit;
-        ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
-        ctx->exec.fuel_remaining = wcf->fuel_limit;
+        ngx_http_wasm_init_request_exec(ctx,
+                                        r,
+                                        &wcf->server_rewrite,
+                                        NGX_HTTP_WASM_PHASE_SERVER_REWRITE,
+                                        wmcf->runtime,
+                                        wcf->fuel_limit,
+                                        wcf->timeslice_fuel);
         return ctx;
     }
 
     if (phase == &wcf->content && wcf->content.set == 1) {
-        ngx_http_wasm_runtime_init_exec_ctx(&ctx->exec,
-                                            r,
-                                            &wcf->content,
-                                            NGX_HTTP_WASM_PHASE_CONTENT,
-                                            wmcf->runtime);
-        ctx->exec.fuel_limit = wcf->fuel_limit;
-        ctx->exec.timeslice_fuel = wcf->timeslice_fuel;
-        ctx->exec.fuel_remaining = wcf->fuel_limit;
+        ngx_http_wasm_init_request_exec(ctx,
+                                        r,
+                                        &wcf->content,
+                                        NGX_HTTP_WASM_PHASE_CONTENT,
+                                        wmcf->runtime,
+                                        wcf->fuel_limit,
+                                        wcf->timeslice_fuel);
         return ctx;
     }
 
@@ -1364,6 +1447,23 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
     }
 
     return NULL;
+}
+
+static void
+ngx_http_wasm_init_request_exec(ngx_http_wasm_ctx_t *ctx,
+                                ngx_http_request_t *r,
+                                ngx_http_wasm_phase_conf_t *phase,
+                                ngx_http_wasm_phase_e phase_kind,
+                                ngx_http_wasm_runtime_state_t *runtime,
+                                ngx_uint_t fuel_limit,
+                                ngx_uint_t timeslice_fuel) {
+    ngx_http_wasm_runtime_cleanup_exec_ctx(&ctx->exec);
+    ngx_http_wasm_runtime_init_exec_ctx(
+        &ctx->exec, r, phase, phase_kind, runtime);
+    ctx->exec.fuel_limit = fuel_limit;
+    ctx->exec.timeslice_fuel = timeslice_fuel;
+    ctx->exec.fuel_remaining = fuel_limit;
+    ctx->exec_completed = 0;
 }
 
 void ngx_http_wasm_resume_handler(ngx_http_request_t *r) {
@@ -1408,8 +1508,10 @@ static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
     if (rc == NGX_AGAIN) {
         r->write_event_handler = ngx_http_wasm_resume_handler;
 
-        if (ngx_http_post_request(r, NULL) != NGX_OK) {
-            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        if (ctx->exec.suspend_kind == NGX_HTTP_WASM_SUSPEND_RESCHEDULE) {
+            if (ngx_http_post_request(r, NULL) != NGX_OK) {
+                return NGX_HTTP_INTERNAL_SERVER_ERROR;
+            }
         }
 
         if (!ctx->waiting &&
@@ -1430,12 +1532,12 @@ static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
     }
 
     ctx->waiting = 0;
+    ctx->exec_completed = 1;
 
     if ((ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_REWRITE ||
          ctx->exec.phase_kind == NGX_HTTP_WASM_PHASE_SERVER_REWRITE) &&
         !ctx->exec.abi.status_set && !ctx->exec.abi.body_set &&
         !ctx->exec.abi.content_type_set) {
-        ngx_http_set_ctx(r, NULL, ngx_http_wasm_module);
         return NGX_DECLINED;
     }
 
