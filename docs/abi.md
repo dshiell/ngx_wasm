@@ -29,6 +29,19 @@ Current SSL hook execution model:
 - they do not support suspension or yielding
 - they do not expose normal HTTP request/response mutation APIs
 
+Current lifecycle/timer execution model:
+
+- `init_by_wasm` runs synchronously during nginx module init
+- `init_worker_by_wasm` runs synchronously once per worker
+- `exit_worker_by_wasm` runs synchronously on worker shutdown, best effort
+- `ngx_wasm_timer_set()` and `ngx_wasm_timer_cancel()` are available only from
+  worker and timer contexts
+- each active timer owns a persistent worker-scoped wasm instance reused across
+  timer firings
+- timer instances are worker-local and do not share linear memory with requests
+  or other workers
+- timer callbacks do not support suspension or yielding in v1
+
 ## Required Guest Export
 
 Current required guest export:
@@ -64,6 +77,9 @@ int ngx_wasm_shm_delete(const void *key_ptr, int key_len);
 int ngx_wasm_metric_counter_inc(const void *name_ptr, int name_len, int delta);
 int ngx_wasm_metric_gauge_set(const void *name_ptr, int name_len, int value);
 int ngx_wasm_metric_gauge_add(const void *name_ptr, int name_len, int delta);
+int ngx_wasm_timer_set(int timer_id, int delay_ms, int repeat,
+                       const void *export_name_ptr, int export_name_len);
+int ngx_wasm_timer_cancel(int timer_id);
 int ngx_wasm_req_set_header(const void *name_ptr, int name_len,
                             const void *value_ptr, int value_len);
 int ngx_wasm_req_get_header(const void *name_ptr, int name_len,
@@ -130,6 +146,23 @@ Expected semantics:
   - returns `-2` for unknown metrics, invalid arguments, missing zone, or type
     mismatch
 
+- `ngx_wasm_timer_set`
+  - schedules or replaces a worker-local timer by numeric `timer_id`
+  - `delay_ms` is the timer delay in milliseconds
+  - `repeat != 0` creates a recurring timer, otherwise one-shot
+  - `export_name_ptr` and `export_name_len` select the guest export to invoke
+    when the timer fires
+  - the timer callback runs in its own persistent worker-scoped instance
+  - returns `0` on success
+  - returns `-2` on invalid arguments, invalid export selection, or host-side
+    allocation/setup failure
+
+- `ngx_wasm_timer_cancel`
+  - cancels a worker-local timer by numeric `timer_id`
+  - canceling a missing timer succeeds
+  - returns `0` on success
+  - returns `-2` on invalid arguments or host-side failure
+
 - `ngx_wasm_req_set_header`
   - sets or replaces a request header visible to later nginx processing
   - currently intended for request metadata mutation rather than full
@@ -186,6 +219,8 @@ Current copy policy:
   nginx shared memory zone
 - metrics state is host-owned and shared across workers through an nginx
   shared memory zone
+- worker timers are host-owned nginx event-loop timers and do not survive a full
+  restart
 
 ## Return Conventions
 
@@ -197,6 +232,7 @@ Current conventions:
 - shared-memory operations return `0` on success except `ngx_wasm_shm_get`,
   which returns the stored length on success
 - metric operations return `0` on success
+- timer operations return `0` on success
 - `ngx_wasm_req_get_header` returns a non-negative length on success
 - `ngx_wasm_req_get_header` returns `-1` for missing headers
 - `ngx_wasm_shm_get` returns `-1` for missing keys
@@ -222,6 +258,20 @@ Current conventions:
 - counters saturate at the maximum signed 64-bit value on overflow
 - metric data survives nginx reload while the zone remains configured, but not
   a full nginx restart
+
+## Current Lifecycle And Timer Limitations
+
+- `init_by_wasm`, `init_worker_by_wasm`, `exit_worker_by_wasm`, and timer
+  callbacks are synchronous only
+- `ngx_wasm_yield()` is not allowed in lifecycle or timer contexts
+- request header/body APIs, response mutation APIs, and SSL APIs are not
+  available in lifecycle or timer contexts
+- timer ids are scoped to a single worker
+- setting the same timer id replaces the previous timer in that worker
+- recurring timers rearm after successful callback completion
+- timer callback failure logs an error and cancels the offending timer
+- timer instances are persistent across firings, but `init_worker_by_wasm` and
+  each timer callback use separate instances in v1
 
 ## Current SSL Limitations
 

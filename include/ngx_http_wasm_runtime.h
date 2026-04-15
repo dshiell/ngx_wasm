@@ -20,6 +20,7 @@ typedef struct ngx_http_wasm_cached_module_s ngx_http_wasm_cached_module_t;
 typedef struct ngx_http_wasm_runtime_state_s ngx_http_wasm_runtime_state_t;
 typedef struct ngx_http_wasm_resume_state_s ngx_http_wasm_resume_state_t;
 typedef struct ngx_http_wasm_phase_conf_s ngx_http_wasm_phase_conf_t;
+typedef struct ngx_http_wasm_worker_state_s ngx_http_wasm_worker_state_t;
 
 typedef enum {
     NGX_HTTP_WASM_EXEC_READY = 0,
@@ -44,6 +45,10 @@ typedef enum {
     NGX_HTTP_WASM_PHASE_LOG,
     NGX_HTTP_WASM_PHASE_SSL_CLIENT_HELLO,
     NGX_HTTP_WASM_PHASE_SSL_CERTIFICATE,
+    NGX_HTTP_WASM_PHASE_INIT,
+    NGX_HTTP_WASM_PHASE_INIT_WORKER,
+    NGX_HTTP_WASM_PHASE_EXIT_WORKER,
+    NGX_HTTP_WASM_PHASE_TIMER,
 } ngx_http_wasm_phase_e;
 
 struct ngx_http_wasm_phase_conf_s {
@@ -59,6 +64,9 @@ typedef struct {
     ngx_http_wasm_shm_zone_t *shm_zone;
     ngx_http_wasm_metrics_zone_t *metrics_zone;
     ngx_array_t *metric_definitions;
+    ngx_http_wasm_phase_conf_t init;
+    ngx_http_wasm_phase_conf_t init_worker;
+    ngx_http_wasm_phase_conf_t exit_worker;
 } ngx_http_wasm_main_conf_t;
 
 typedef struct {
@@ -83,6 +91,9 @@ typedef struct {
 #if (NGX_HTTP_SSL)
     ngx_ssl_conn_t *ssl_connection;
 #endif
+    ngx_pool_t *pool;
+    ngx_log_t *log;
+    ngx_http_wasm_worker_state_t *worker_state;
     ngx_http_wasm_phase_conf_t *conf;
     ngx_http_wasm_runtime_state_t *runtime;
     ngx_http_wasm_abi_ctx_t abi;
@@ -109,6 +120,15 @@ void ngx_http_wasm_runtime_destroy(ngx_http_wasm_main_conf_t *wmcf);
 void ngx_http_wasm_runtime_init_exec_ctx(
     ngx_http_wasm_exec_ctx_t *ctx,
     ngx_http_request_t *r,
+    ngx_http_wasm_phase_conf_t *conf,
+    ngx_http_wasm_phase_e phase_kind,
+    ngx_http_wasm_runtime_state_t *runtime);
+void ngx_http_wasm_runtime_init_worker_exec_ctx(
+    ngx_http_wasm_exec_ctx_t *ctx,
+    ngx_pool_t *pool,
+    ngx_log_t *log,
+    ngx_http_wasm_worker_state_t *worker_state,
+    ngx_http_wasm_main_conf_t *wmcf,
     ngx_http_wasm_phase_conf_t *conf,
     ngx_http_wasm_phase_e phase_kind,
     ngx_http_wasm_runtime_state_t *runtime);

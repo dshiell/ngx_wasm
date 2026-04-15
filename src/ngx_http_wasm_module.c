@@ -27,13 +27,28 @@ ngx_http_wasm_get_or_create_ctx(ngx_http_request_t *r,
                                 ngx_http_wasm_conf_t *wcf,
                                 ngx_http_wasm_main_conf_t *wmcf,
                                 ngx_http_wasm_phase_conf_t *phase);
+static ngx_http_wasm_worker_timer_t *
+ngx_http_wasm_find_worker_timer(ngx_http_wasm_worker_state_t *state,
+                                ngx_int_t timer_id);
+static void ngx_http_wasm_worker_timer_handler(ngx_event_t *ev);
+static void
+ngx_http_wasm_cancel_all_worker_timers(ngx_http_wasm_worker_state_t *state);
 static ngx_int_t ngx_http_wasm_configure_phase(ngx_conf_t *cf,
                                                ngx_http_wasm_phase_conf_t *dst);
+static ngx_int_t
+ngx_http_wasm_configure_main_phase(ngx_conf_t *cf,
+                                   ngx_http_wasm_phase_conf_t *dst);
 static void ngx_http_wasm_merge_phase_conf(ngx_http_wasm_phase_conf_t *parent,
                                            ngx_http_wasm_phase_conf_t *child);
 static void ngx_http_wasm_cleanup_main_conf(void *data);
 static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_init_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_init_worker_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_exit_worker_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_server_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
@@ -92,6 +107,27 @@ static char *
 ngx_http_wasm_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 
 static ngx_command_t ngx_http_wasm_commands[] = {
+
+    {ngx_string("init_by_wasm"),
+     NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE2,
+     ngx_http_wasm_init_by,
+     NGX_HTTP_MAIN_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("init_worker_by_wasm"),
+     NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE2,
+     ngx_http_wasm_init_worker_by,
+     NGX_HTTP_MAIN_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("exit_worker_by_wasm"),
+     NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE2,
+     ngx_http_wasm_exit_worker_by,
+     NGX_HTTP_MAIN_CONF_OFFSET,
+     0,
+     NULL},
 
     {ngx_string("content_by_wasm"),
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
@@ -251,6 +287,8 @@ ngx_module_t ngx_http_wasm_module = {
     NULL,                       /* exit master */
     NGX_MODULE_V1_PADDING};
 
+static ngx_http_wasm_worker_state_t *ngx_http_wasm_current_worker_state;
+
 static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     ngx_http_wasm_conf_t *conf;
 
@@ -349,6 +387,10 @@ static void *ngx_http_wasm_create_main_conf(ngx_conf_t *cf) {
     if (wmcf->metric_definitions == NULL) {
         return NULL;
     }
+
+    wmcf->init.set = NGX_CONF_UNSET;
+    wmcf->init_worker.set = NGX_CONF_UNSET;
+    wmcf->exit_worker.set = NGX_CONF_UNSET;
 
     if (ngx_http_wasm_runtime_init(cf, wmcf) != NGX_OK) {
         return NULL;
@@ -572,33 +614,347 @@ static ngx_int_t ngx_http_wasm_postconfiguration(ngx_conf_t *cf) {
 }
 
 static ngx_int_t ngx_http_wasm_init_module(ngx_cycle_t *cycle) {
-    (void)cycle;
+    ngx_http_wasm_exec_ctx_t exec;
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_int_t rc;
+
+    wmcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_wasm_module);
+    if (wmcf == NULL || wmcf->runtime == NULL || wmcf->init.set != 1) {
+        return NGX_OK;
+    }
+
+    ngx_log_error(NGX_LOG_NOTICE,
+                  cycle->log,
+                  0,
+                  "ngx_wasm: init handler module=\"%V\" export=\"%V\"",
+                  &wmcf->init.module_path,
+                  &wmcf->init.export_name);
+
+    ngx_http_wasm_runtime_init_worker_exec_ctx(&exec,
+                                               cycle->pool,
+                                               cycle->log,
+                                               NULL,
+                                               wmcf,
+                                               &wmcf->init,
+                                               NGX_HTTP_WASM_PHASE_INIT,
+                                               wmcf->runtime);
+    exec.fuel_limit = NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT;
+    exec.timeslice_fuel = 0;
+    exec.fuel_remaining = exec.fuel_limit;
+
+    rc = ngx_http_wasm_runtime_run(&exec);
+    ngx_http_wasm_runtime_cleanup_exec_ctx(&exec);
+
+    if (rc != NGX_OK) {
+        ngx_log_error(
+            NGX_LOG_ERR, cycle->log, 0, "ngx_wasm: init_by_wasm failed");
+        return NGX_ERROR;
+    }
 
     return NGX_OK;
 }
 
 static ngx_int_t ngx_http_wasm_init_process(ngx_cycle_t *cycle) {
     ngx_int_t rc;
+    ngx_http_wasm_exec_ctx_t exec;
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_http_wasm_worker_state_t *state;
 
-    (void)cycle;
+    wmcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_wasm_module);
+    if (wmcf != NULL) {
+        state = ngx_pcalloc(cycle->pool, sizeof(*state));
+        if (state == NULL) {
+            return NGX_ERROR;
+        }
+
+        state->cycle = cycle;
+        state->pool = cycle->pool;
+        state->log = cycle->log;
+        state->main_conf = wmcf;
+        state->timers = ngx_array_create(
+            cycle->pool, 4, sizeof(ngx_http_wasm_worker_timer_t *));
+        if (state->timers == NULL) {
+            return NGX_ERROR;
+        }
+
+        ngx_http_wasm_current_worker_state = state;
+    }
 
     rc = ngx_http_wasm_header_filter_init_process();
     if (rc != NGX_OK) {
         return rc;
     }
 
-    return ngx_http_wasm_body_filter_init_process();
+    rc = ngx_http_wasm_body_filter_init_process();
+    if (rc != NGX_OK) {
+        return rc;
+    }
+
+    if (wmcf == NULL || wmcf->runtime == NULL || wmcf->init_worker.set != 1) {
+        return NGX_OK;
+    }
+
+    ngx_log_error(NGX_LOG_NOTICE,
+                  cycle->log,
+                  0,
+                  "ngx_wasm: init worker handler module=\"%V\" export=\"%V\"",
+                  &wmcf->init_worker.module_path,
+                  &wmcf->init_worker.export_name);
+
+    ngx_http_wasm_runtime_init_worker_exec_ctx(
+        &exec,
+        cycle->pool,
+        cycle->log,
+        ngx_http_wasm_current_worker_state,
+        wmcf,
+        &wmcf->init_worker,
+        NGX_HTTP_WASM_PHASE_INIT_WORKER,
+        wmcf->runtime);
+    exec.fuel_limit = NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT;
+    exec.timeslice_fuel = 0;
+    exec.fuel_remaining = exec.fuel_limit;
+
+    rc = ngx_http_wasm_runtime_run(&exec);
+    ngx_http_wasm_runtime_cleanup_exec_ctx(&exec);
+
+    if (rc != NGX_OK) {
+        ngx_log_error(
+            NGX_LOG_ERR, cycle->log, 0, "ngx_wasm: init_worker_by_wasm failed");
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
 }
 
 static void ngx_http_wasm_exit_process(ngx_cycle_t *cycle) {
+    ngx_http_wasm_exec_ctx_t exec;
     ngx_http_wasm_main_conf_t *wmcf;
+    ngx_int_t rc;
 
     wmcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_wasm_module);
-    if (wmcf == NULL) {
+    if (wmcf == NULL || ngx_http_wasm_current_worker_state == NULL) {
         return;
     }
 
+    ngx_http_wasm_current_worker_state->shutting_down = 1;
+
+    if (wmcf->runtime != NULL && wmcf->exit_worker.set == 1) {
+        ngx_log_error(
+            NGX_LOG_NOTICE,
+            cycle->log,
+            0,
+            "ngx_wasm: exit worker handler module=\"%V\" export=\"%V\"",
+            &wmcf->exit_worker.module_path,
+            &wmcf->exit_worker.export_name);
+
+        ngx_http_wasm_runtime_init_worker_exec_ctx(
+            &exec,
+            cycle->pool,
+            cycle->log,
+            ngx_http_wasm_current_worker_state,
+            wmcf,
+            &wmcf->exit_worker,
+            NGX_HTTP_WASM_PHASE_EXIT_WORKER,
+            wmcf->runtime);
+        exec.fuel_limit = NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT;
+        exec.timeslice_fuel = 0;
+        exec.fuel_remaining = exec.fuel_limit;
+
+        rc = ngx_http_wasm_runtime_run(&exec);
+        ngx_http_wasm_runtime_cleanup_exec_ctx(&exec);
+
+        if (rc != NGX_OK) {
+            ngx_log_error(NGX_LOG_ERR,
+                          cycle->log,
+                          0,
+                          "ngx_wasm: exit_worker_by_wasm failed");
+        }
+    }
+
+    ngx_http_wasm_cancel_all_worker_timers(ngx_http_wasm_current_worker_state);
+    ngx_http_wasm_current_worker_state = NULL;
     ngx_http_wasm_runtime_destroy(wmcf);
+}
+
+static ngx_http_wasm_worker_timer_t *
+ngx_http_wasm_find_worker_timer(ngx_http_wasm_worker_state_t *state,
+                                ngx_int_t timer_id) {
+    ngx_http_wasm_worker_timer_t **timers;
+    ngx_uint_t i;
+
+    if (state == NULL || state->timers == NULL) {
+        return NULL;
+    }
+
+    timers = state->timers->elts;
+    for (i = 0; i < state->timers->nelts; i++) {
+        if (timers[i] != NULL && timers[i]->active &&
+            timers[i]->timer_id == timer_id) {
+            return timers[i];
+        }
+    }
+
+    return NULL;
+}
+
+static void ngx_http_wasm_worker_timer_handler(ngx_event_t *ev) {
+    ngx_http_wasm_worker_timer_t *timer;
+    ngx_int_t rc;
+
+    timer = ev->data;
+    if (timer == NULL || !timer->active || timer->worker_state == NULL ||
+        timer->worker_state->shutting_down) {
+        return;
+    }
+
+    rc = ngx_http_wasm_runtime_run(&timer->exec);
+    if (rc != NGX_OK) {
+        ngx_log_error(NGX_LOG_ERR,
+                      timer->worker_state->log,
+                      0,
+                      "ngx_wasm: timer %i callback failed, canceling",
+                      timer->timer_id);
+        timer->active = 0;
+        ngx_http_wasm_runtime_cleanup_exec_ctx(&timer->exec);
+        return;
+    }
+
+    if (timer->active && timer->repeat && !timer->worker_state->shutting_down) {
+        ngx_add_timer(&timer->event, timer->delay);
+        return;
+    }
+
+    timer->active = 0;
+    ngx_http_wasm_runtime_cleanup_exec_ctx(&timer->exec);
+}
+
+static void
+ngx_http_wasm_cancel_all_worker_timers(ngx_http_wasm_worker_state_t *state) {
+    ngx_http_wasm_worker_timer_t **timers;
+    ngx_uint_t i;
+
+    if (state == NULL || state->timers == NULL) {
+        return;
+    }
+
+    timers = state->timers->elts;
+    for (i = 0; i < state->timers->nelts; i++) {
+        if (timers[i] == NULL) {
+            continue;
+        }
+
+        timers[i]->active = 0;
+        if (timers[i]->event.timer_set) {
+            ngx_del_timer(&timers[i]->event);
+        }
+        ngx_http_wasm_runtime_cleanup_exec_ctx(&timers[i]->exec);
+    }
+}
+
+ngx_int_t ngx_http_wasm_worker_timer_set(ngx_http_wasm_exec_ctx_t *ctx,
+                                         ngx_int_t timer_id,
+                                         ngx_msec_t delay,
+                                         ngx_flag_t repeat,
+                                         const u_char *export_name,
+                                         size_t export_name_len) {
+    ngx_http_wasm_worker_state_t *state;
+    ngx_http_wasm_worker_timer_t *timer;
+    ngx_http_wasm_worker_timer_t **slot;
+    u_char *p;
+
+    if (ctx == NULL || ctx->worker_state == NULL || ctx->conf == NULL ||
+        ctx->runtime == NULL || export_name == NULL || export_name_len == 0 ||
+        export_name_len > 256) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    state = ctx->worker_state;
+    timer = ngx_http_wasm_find_worker_timer(state, timer_id);
+
+    if (timer == NULL) {
+        timer = ngx_pcalloc(state->pool, sizeof(*timer));
+        if (timer == NULL) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+
+        slot = ngx_array_push(state->timers);
+        if (slot == NULL) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+
+        *slot = timer;
+        timer->worker_state = state;
+        timer->timer_id = timer_id;
+        timer->event.handler = ngx_http_wasm_worker_timer_handler;
+        timer->event.data = timer;
+        timer->event.log = state->log;
+    } else {
+        timer->active = 0;
+        if (timer->event.timer_set) {
+            ngx_del_timer(&timer->event);
+        }
+        ngx_http_wasm_runtime_cleanup_exec_ctx(&timer->exec);
+    }
+
+    p = ngx_pnalloc(state->pool, export_name_len);
+    if (p == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ngx_memcpy(p, export_name, export_name_len);
+
+    timer->phase = *ctx->conf;
+    timer->phase.export_name.data = p;
+    timer->phase.export_name.len = export_name_len;
+    timer->export_name = timer->phase.export_name;
+    timer->delay = delay;
+    timer->repeat = repeat ? 1 : 0;
+    timer->active = 1;
+
+    ngx_http_wasm_runtime_init_worker_exec_ctx(&timer->exec,
+                                               state->pool,
+                                               state->log,
+                                               state,
+                                               state->main_conf,
+                                               &timer->phase,
+                                               NGX_HTTP_WASM_PHASE_TIMER,
+                                               state->main_conf->runtime);
+    timer->exec.fuel_limit = NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT;
+    timer->exec.timeslice_fuel = 0;
+    timer->exec.fuel_remaining = timer->exec.fuel_limit;
+
+    ngx_add_timer(&timer->event, delay);
+
+    return NGX_HTTP_WASM_OK;
+}
+
+ngx_int_t ngx_http_wasm_worker_timer_cancel(ngx_http_wasm_exec_ctx_t *ctx,
+                                            ngx_int_t timer_id) {
+    ngx_http_wasm_worker_state_t *state;
+    ngx_http_wasm_worker_timer_t *timer;
+
+    if (ctx == NULL || ctx->worker_state == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    state = ctx->worker_state;
+    timer = ngx_http_wasm_find_worker_timer(state, timer_id);
+    if (timer == NULL) {
+        return NGX_HTTP_WASM_OK;
+    }
+
+    timer->active = 0;
+    if (timer->event.timer_set) {
+        ngx_del_timer(&timer->event);
+    }
+
+    if (&timer->exec == ctx) {
+        return NGX_HTTP_WASM_OK;
+    }
+
+    ngx_http_wasm_runtime_cleanup_exec_ctx(&timer->exec);
+
+    return NGX_HTTP_WASM_OK;
 }
 
 static ngx_int_t
@@ -632,6 +988,63 @@ ngx_http_wasm_configure_phase(ngx_conf_t *cf, ngx_http_wasm_phase_conf_t *dst) {
     }
 
     return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_wasm_configure_main_phase(ngx_conf_t *cf,
+                                   ngx_http_wasm_phase_conf_t *dst) {
+    return ngx_http_wasm_configure_phase(cf, dst);
+}
+
+static char *
+ngx_http_wasm_init_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_main_conf_t *wmcf;
+
+    (void)cmd;
+    wmcf = conf;
+
+    switch (ngx_http_wasm_configure_main_phase(cf, &wmcf->init)) {
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
+}
+
+static char *
+ngx_http_wasm_init_worker_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_main_conf_t *wmcf;
+
+    (void)cmd;
+    wmcf = conf;
+
+    switch (ngx_http_wasm_configure_main_phase(cf, &wmcf->init_worker)) {
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
+}
+
+static char *
+ngx_http_wasm_exit_worker_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_main_conf_t *wmcf;
+
+    (void)cmd;
+    wmcf = conf;
+
+    switch (ngx_http_wasm_configure_main_phase(cf, &wmcf->exit_worker)) {
+        case NGX_OK:
+            return NGX_CONF_OK;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
 }
 
 static char *

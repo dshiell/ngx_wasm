@@ -42,6 +42,7 @@
 #define NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET 0x1000
 #define NGX_HTTP_WASM_ABI_CAP_SHARED_KV 0x2000
 #define NGX_HTTP_WASM_ABI_CAP_METRICS 0x4000
+#define NGX_HTTP_WASM_ABI_CAP_TIMER_CONTROL 0x8000
 
 typedef struct {
     ngx_http_request_t *request;
