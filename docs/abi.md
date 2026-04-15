@@ -61,6 +61,9 @@ int ngx_wasm_shm_get(const void *key_ptr, int key_len,
 int ngx_wasm_shm_set(const void *key_ptr, int key_len,
                      const void *value_ptr, int value_len);
 int ngx_wasm_shm_delete(const void *key_ptr, int key_len);
+int ngx_wasm_metric_counter_inc(const void *name_ptr, int name_len, int delta);
+int ngx_wasm_metric_gauge_set(const void *name_ptr, int name_len, int value);
+int ngx_wasm_metric_gauge_add(const void *name_ptr, int name_len, int delta);
 int ngx_wasm_req_set_header(const void *name_ptr, int name_len,
                             const void *value_ptr, int value_len);
 int ngx_wasm_req_get_header(const void *name_ptr, int name_len,
@@ -76,6 +79,9 @@ Expected semantics:
 
 - `ngx_wasm_log`
   - logs a guest-provided byte slice at the requested nginx log level
+  - log levels must map to nginx-supported levels
+  - messages longer than `1024` bytes are truncated
+  - guest bytes are never treated as a trusted format string
   - returns `0` on success
 
 - `ngx_wasm_resp_set_status`
@@ -100,6 +106,29 @@ Expected semantics:
   - removes a key from the configured `wasm_shm_zone`
   - returns `0` on success, including deleting a missing key
   - returns `-2` on invalid arguments, missing zone, or host-side failure
+
+- `ngx_wasm_metric_counter_inc`
+  - increments a declared counter in the configured `wasm_metrics_zone`
+  - metric names must be declared with `wasm_counter`
+  - delta must be non-negative
+  - returns `0` on success
+  - returns `-2` for unknown metrics, invalid arguments, missing zone, or type
+    mismatch
+
+- `ngx_wasm_metric_gauge_set`
+  - sets a declared gauge in the configured `wasm_metrics_zone`
+  - metric names must be declared with `wasm_gauge`
+  - returns `0` on success
+  - returns `-2` for unknown metrics, invalid arguments, missing zone, or type
+    mismatch
+
+- `ngx_wasm_metric_gauge_add`
+  - adds a signed delta to a declared gauge in the configured
+    `wasm_metrics_zone`
+  - metric names must be declared with `wasm_gauge`
+  - returns `0` on success
+  - returns `-2` for unknown metrics, invalid arguments, missing zone, or type
+    mismatch
 
 - `ngx_wasm_req_set_header`
   - sets or replaces a request header visible to later nginx processing
@@ -155,6 +184,8 @@ Current copy policy:
 - SSL hook state is connection-local and lasts only for the current handshake
 - shared-memory KV state is host-owned and shared across workers through an
   nginx shared memory zone
+- metrics state is host-owned and shared across workers through an nginx
+  shared memory zone
 
 ## Return Conventions
 
@@ -165,6 +196,7 @@ Current conventions:
 - host import functions return `0` on success
 - shared-memory operations return `0` on success except `ngx_wasm_shm_get`,
   which returns the stored length on success
+- metric operations return `0` on success
 - `ngx_wasm_req_get_header` returns a non-negative length on success
 - `ngx_wasm_req_get_header` returns `-1` for missing headers
 - `ngx_wasm_shm_get` returns `-1` for missing keys
@@ -179,6 +211,17 @@ Current conventions:
 - no TTL, eviction, atomic increment, or list operations yet
 - data survives nginx reload while the zone remains configured, but not a full
   nginx restart
+
+## Current Metrics Limitations
+
+- a single default `wasm_metrics_zone` is supported in v1
+- metric names must be declared in nginx config with `wasm_counter` or
+  `wasm_gauge`
+- no labels, histograms, or guest-created metric names
+- metrics use signed integer values in v1
+- counters saturate at the maximum signed 64-bit value on overflow
+- metric data survives nginx reload while the zone remains configured, but not
+  a full nginx restart
 
 ## Current SSL Limitations
 

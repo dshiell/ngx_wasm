@@ -9,6 +9,7 @@
 #endif
 
 #include <ngx_http_wasm_abi.h>
+#include <ngx_http_wasm_metrics.h>
 
 #define NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT 1000000
 #define NGX_HTTP_WASM_DEFAULT_TIMESLICE_FUEL 10000
@@ -56,6 +57,8 @@ typedef struct {
     ngx_array_t *modules;
     ngx_http_wasm_runtime_state_t *runtime;
     ngx_http_wasm_shm_zone_t *shm_zone;
+    ngx_http_wasm_metrics_zone_t *metrics_zone;
+    ngx_array_t *metric_definitions;
 } ngx_http_wasm_main_conf_t;
 
 typedef struct {
@@ -71,6 +74,7 @@ typedef struct {
     ngx_http_wasm_phase_conf_t log;
     ngx_http_wasm_phase_conf_t ssl_client_hello;
     ngx_http_wasm_phase_conf_t ssl_certificate;
+    ngx_flag_t metrics_endpoint;
 } ngx_http_wasm_conf_t;
 
 typedef struct {

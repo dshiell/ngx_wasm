@@ -26,6 +26,10 @@ our @EXPORT_OK = qw(
     shm_get_wasm
     shm_delete_wasm
     shm_error_check_wasm
+    metric_counter_inc_wasm
+    metric_gauge_ops_wasm
+    metric_unknown_wasm
+    metric_log_inc_wasm
     resp_header_set_wasm
     resp_header_echo_wasm
     resp_location_set_wasm
@@ -123,6 +127,22 @@ sub shm_delete_wasm {
 
 sub shm_error_check_wasm {
     return wasm_root() . "/wasm/http-guests/build/shm_error_check.wasm";
+}
+
+sub metric_counter_inc_wasm {
+    return wasm_root() . "/wasm/http-guests/src/metric_counter_inc.wat";
+}
+
+sub metric_gauge_ops_wasm {
+    return wasm_root() . "/wasm/http-guests/src/metric_gauge_ops.wat";
+}
+
+sub metric_unknown_wasm {
+    return wasm_root() . "/wasm/http-guests/src/metric_unknown.wat";
+}
+
+sub metric_log_inc_wasm {
+    return wasm_root() . "/wasm/http-guests/src/metric_log_inc.wat";
 }
 
 sub resp_header_set_wasm {
