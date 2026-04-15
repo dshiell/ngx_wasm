@@ -55,6 +55,7 @@ $ngx_addon_dir/src/ngx_http_wasm_header_filter.c \
 $ngx_addon_dir/src/ngx_http_wasm_body_filter.c \
 $ngx_addon_dir/src/ngx_http_wasm_request_body.c \
 $ngx_addon_dir/src/ngx_http_wasm_shm.c \
+$ngx_addon_dir/src/ngx_http_wasm_metrics.c \
 $ngx_addon_dir/src/ngx_http_wasm_abi.c \
 $ngx_addon_dir/src/ngx_http_wasm_runtime.c"
 . auto/module

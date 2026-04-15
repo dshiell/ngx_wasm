@@ -39,6 +39,9 @@ int ngx_wasm_shm_set(const void *key_ptr,
                      const void *value_ptr,
                      int value_len);
 int ngx_wasm_shm_delete(const void *key_ptr, int key_len);
+int ngx_wasm_metric_counter_inc(const void *name_ptr, int name_len, int delta);
+int ngx_wasm_metric_gauge_set(const void *name_ptr, int name_len, int value);
+int ngx_wasm_metric_gauge_add(const void *name_ptr, int name_len, int delta);
 int ngx_wasm_ssl_get_server_name(void *buf_ptr, int buf_len);
 int ngx_wasm_ssl_reject_handshake(int alert);
 int ngx_wasm_ssl_set_certificate(const void *cert_ptr,

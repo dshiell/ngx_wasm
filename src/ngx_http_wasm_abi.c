@@ -66,6 +66,7 @@ void ngx_http_wasm_abi_init(ngx_http_wasm_abi_ctx_t *ctx,
 #endif
                             ngx_connection_t *c,
                             ngx_http_wasm_shm_zone_t *shm_zone,
+                            ngx_http_wasm_metrics_zone_t *metrics_zone,
                             ngx_uint_t capabilities) {
     ngx_memzero(ctx, sizeof(*ctx));
 
@@ -75,6 +76,7 @@ void ngx_http_wasm_abi_init(ngx_http_wasm_abi_ctx_t *ctx,
 #endif
     ctx->connection = c;
     ctx->shm_zone = shm_zone;
+    ctx->metrics_zone = metrics_zone;
     ctx->abi_version = NGX_HTTP_WASM_ABI_VERSION;
     ctx->capabilities = capabilities;
     ctx->status = NGX_HTTP_OK;
@@ -331,6 +333,14 @@ ngx_int_t ngx_http_wasm_abi_log(ngx_http_wasm_abi_ctx_t *ctx,
                                 ngx_uint_t level,
                                 const u_char *data,
                                 size_t len) {
+    if (level > NGX_LOG_DEBUG) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (len > NGX_HTTP_WASM_LOG_MAX_MESSAGE_LEN) {
+        len = NGX_HTTP_WASM_LOG_MAX_MESSAGE_LEN;
+    }
+
     ngx_log_error(level,
                   ngx_http_wasm_abi_log_target(ctx),
                   0,
@@ -475,6 +485,45 @@ ngx_int_t ngx_http_wasm_abi_shm_delete(ngx_http_wasm_abi_ctx_t *ctx,
     }
 
     return ngx_http_wasm_shm_delete(ctx->shm_zone, key, key_len);
+}
+
+ngx_int_t ngx_http_wasm_abi_metric_counter_inc(ngx_http_wasm_abi_ctx_t *ctx,
+                                               const u_char *name,
+                                               size_t name_len,
+                                               ngx_int_t delta) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_METRICS) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_metrics_counter_inc(
+        ctx->metrics_zone, name, name_len, delta);
+}
+
+ngx_int_t ngx_http_wasm_abi_metric_gauge_set(ngx_http_wasm_abi_ctx_t *ctx,
+                                             const u_char *name,
+                                             size_t name_len,
+                                             ngx_int_t value) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_METRICS) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_metrics_gauge_set(
+        ctx->metrics_zone, name, name_len, value);
+}
+
+ngx_int_t ngx_http_wasm_abi_metric_gauge_add(ngx_http_wasm_abi_ctx_t *ctx,
+                                             const u_char *name,
+                                             size_t name_len,
+                                             ngx_int_t delta) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_METRICS) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_metrics_gauge_add(
+        ctx->metrics_zone, name, name_len, delta);
 }
 
 #if (NGX_HTTP_SSL)

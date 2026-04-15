@@ -7,10 +7,12 @@
 #endif
 
 #include <ngx_http_wasm_module_int.h>
+#include <ngx_http_wasm_metrics.h>
 #include <ngx_http_wasm_runtime.h>
 #include <ngx_http_wasm_shm.h>
 
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
+static ngx_int_t ngx_http_wasm_metrics_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_server_rewrite_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_log_handler(ngx_http_request_t *r);
@@ -53,6 +55,14 @@ static char *ngx_http_wasm_request_body_buffer_size(ngx_conf_t *cf,
                                                     void *conf);
 static char *
 ngx_http_wasm_shm_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_metrics_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_counter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_gauge(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_metrics(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_wasm_body_filter_file_chunk_size(ngx_conf_t *cf,
                                                        ngx_command_t *cmd,
                                                        void *conf);
@@ -61,6 +71,7 @@ ngx_http_wasm_fuel_limit(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_timeslice_fuel(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_wasm_install_content_handler(ngx_conf_t *cf);
+static ngx_int_t ngx_http_wasm_install_metrics_handler(ngx_conf_t *cf);
 static ngx_int_t ngx_http_wasm_postconfiguration(ngx_conf_t *cf);
 #if (NGX_HTTP_SSL)
 static ngx_int_t ngx_http_wasm_ssl_init(ngx_conf_t *cf);
@@ -158,6 +169,34 @@ static ngx_command_t ngx_http_wasm_commands[] = {
      0,
      NULL},
 
+    {ngx_string("wasm_metrics_zone"),
+     NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE2,
+     ngx_http_wasm_metrics_zone,
+     NGX_HTTP_MAIN_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("wasm_counter"),
+     NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE1,
+     ngx_http_wasm_counter,
+     NGX_HTTP_MAIN_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("wasm_gauge"),
+     NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE1,
+     ngx_http_wasm_gauge,
+     NGX_HTTP_MAIN_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("wasm_metrics"),
+     NGX_HTTP_LOC_CONF | NGX_CONF_NOARGS,
+     ngx_http_wasm_metrics,
+     NGX_HTTP_LOC_CONF_OFFSET,
+     0,
+     NULL},
+
     {ngx_string("wasm_request_body_buffer_size"),
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
          NGX_CONF_TAKE1,
@@ -232,6 +271,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     conf->timeslice_fuel = NGX_CONF_UNSET_UINT;
     conf->request_body_buffer_size = NGX_CONF_UNSET_SIZE;
     conf->body_filter_file_chunk_size = NGX_CONF_UNSET_SIZE;
+    conf->metrics_endpoint = NGX_CONF_UNSET;
 
     return conf;
 }
@@ -254,6 +294,7 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
         child->body_filter_file_chunk_size,
         parent->body_filter_file_chunk_size,
         NGX_HTTP_WASM_DEFAULT_BODY_FILTER_FILE_CHUNK_SIZE);
+    ngx_conf_merge_value(child->metrics_endpoint, parent->metrics_endpoint, 0);
 
     ngx_http_wasm_merge_phase_conf(&parent->content, &child->content);
     ngx_http_wasm_merge_phase_conf(&parent->rewrite, &child->rewrite);
@@ -303,6 +344,12 @@ static void *ngx_http_wasm_create_main_conf(ngx_conf_t *cf) {
         return NULL;
     }
 
+    wmcf->metric_definitions =
+        ngx_array_create(cf->pool, 4, sizeof(ngx_http_wasm_metric_def_t));
+    if (wmcf->metric_definitions == NULL) {
+        return NULL;
+    }
+
     if (ngx_http_wasm_runtime_init(cf, wmcf) != NGX_OK) {
         return NULL;
     }
@@ -324,7 +371,17 @@ static char *ngx_http_wasm_init_main_conf(ngx_conf_t *cf, void *conf) {
 
     (void)cf;
 
-    if (wmcf->modules == NULL || wmcf->runtime == NULL) {
+    if (wmcf->modules == NULL || wmcf->runtime == NULL ||
+        wmcf->metric_definitions == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    if (wmcf->metric_definitions->nelts != 0 && wmcf->metrics_zone == NULL) {
+        ngx_conf_log_error(NGX_LOG_EMERG,
+                           cf,
+                           0,
+                           "\"wasm_metrics_zone\" is required when metrics "
+                           "are declared");
         return NGX_CONF_ERROR;
     }
 
@@ -355,6 +412,63 @@ ngx_http_wasm_shm_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         cf, &wmcf->shm_zone, &value[1], (size_t)size);
 }
 
+static char *
+ngx_http_wasm_metrics_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_str_t *value;
+    off_t size;
+
+    (void)cmd;
+    wmcf = conf;
+
+    value = cf->args->elts;
+    size = ngx_parse_size(&value[2]);
+    if (size == NGX_ERROR || size < (off_t)(8 * ngx_pagesize)) {
+        ngx_conf_log_error(NGX_LOG_EMERG,
+                           cf,
+                           0,
+                           "invalid wasm_metrics_zone size \"%V\"",
+                           &value[2]);
+        return NGX_CONF_ERROR;
+    }
+
+    return ngx_http_wasm_metrics_add_zone(cf,
+                                          &wmcf->metrics_zone,
+                                          wmcf->metric_definitions,
+                                          &value[1],
+                                          (size_t)size);
+}
+
+static char *
+ngx_http_wasm_counter(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_str_t *value;
+
+    (void)cmd;
+    wmcf = conf;
+    value = cf->args->elts;
+
+    return ngx_http_wasm_metrics_declare(cf,
+                                         wmcf->metric_definitions,
+                                         &value[1],
+                                         NGX_HTTP_WASM_METRIC_KIND_COUNTER);
+}
+
+static char *
+ngx_http_wasm_gauge(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_str_t *value;
+
+    (void)cmd;
+    wmcf = conf;
+    value = cf->args->elts;
+
+    return ngx_http_wasm_metrics_declare(cf,
+                                         wmcf->metric_definitions,
+                                         &value[1],
+                                         NGX_HTTP_WASM_METRIC_KIND_GAUGE);
+}
+
 static void *ngx_http_wasm_create_srv_conf(ngx_conf_t *cf) {
     return ngx_http_wasm_create_conf(cf);
 }
@@ -380,7 +494,22 @@ ngx_http_wasm_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
     }
 
     if (conf->content.set == 1) {
+        if (conf->metrics_endpoint == 1) {
+            ngx_conf_log_error(NGX_LOG_EMERG,
+                               cf,
+                               0,
+                               "\"content_by_wasm\" conflicts with "
+                               "\"wasm_metrics\"");
+            return NGX_CONF_ERROR;
+        }
+
         if (ngx_http_wasm_install_content_handler(cf) != NGX_OK) {
+            return NGX_CONF_ERROR;
+        }
+    }
+
+    if (conf->metrics_endpoint == 1) {
+        if (ngx_http_wasm_install_metrics_handler(cf) != NGX_OK) {
             return NGX_CONF_ERROR;
         }
     }
@@ -393,6 +522,15 @@ static ngx_int_t ngx_http_wasm_install_content_handler(ngx_conf_t *cf) {
 
     clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
     clcf->handler = ngx_http_wasm_content_handler;
+
+    return NGX_OK;
+}
+
+static ngx_int_t ngx_http_wasm_install_metrics_handler(ngx_conf_t *cf) {
+    ngx_http_core_loc_conf_t *clcf;
+
+    clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+    clcf->handler = ngx_http_wasm_metrics_handler;
 
     return NGX_OK;
 }
@@ -511,6 +649,22 @@ ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         default:
             return NGX_CONF_ERROR;
     }
+}
+
+static char *
+ngx_http_wasm_metrics(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+
+    (void)cmd;
+    wcf = conf;
+
+    if (wcf->metrics_endpoint == 1) {
+        return "is duplicate";
+    }
+
+    wcf->metrics_endpoint = 1;
+
+    return NGX_CONF_OK;
 }
 
 static char *ngx_http_wasm_server_rewrite_by(ngx_conf_t *cf,
@@ -748,6 +902,81 @@ static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r) {
     }
 
     return ngx_http_wasm_run_phase(r, wcf, &wcf->content, &phase_name);
+}
+
+static ngx_int_t ngx_http_wasm_metrics_handler(ngx_http_request_t *r) {
+    ngx_buf_t *b;
+    ngx_chain_t out;
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_http_wasm_metric_def_t *defs;
+    ngx_int_t rc;
+    ngx_uint_t i;
+    ngx_uint_t kind;
+    int64_t value;
+    size_t len;
+    u_char *p, *last;
+
+    wmcf = ngx_http_get_module_main_conf(r, ngx_http_wasm_module);
+    if (wmcf == NULL || wmcf->metrics_zone == NULL ||
+        wmcf->metric_definitions == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    defs = wmcf->metric_definitions->elts;
+    len = 0;
+    for (i = 0; i < wmcf->metric_definitions->nelts; i++) {
+        len += sizeof("# TYPE ") - 1 + defs[i].name.len + sizeof(" counter\n") -
+               1 + defs[i].name.len + NGX_INT64_LEN + 2;
+    }
+
+    p = ngx_pnalloc(r->pool, len == 0 ? 1 : len);
+    if (p == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    last = p;
+    for (i = 0; i < wmcf->metric_definitions->nelts; i++) {
+        rc = ngx_http_wasm_metrics_get(wmcf->metrics_zone,
+                                       defs[i].name.data,
+                                       defs[i].name.len,
+                                       &kind,
+                                       &value);
+        if (rc != NGX_HTTP_WASM_OK) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        last = ngx_sprintf(
+            last,
+            "# TYPE %V %s\n%V %L\n",
+            &defs[i].name,
+            (kind == NGX_HTTP_WASM_METRIC_KIND_COUNTER) ? "counter" : "gauge",
+            &defs[i].name,
+            value);
+    }
+
+    r->headers_out.status = NGX_HTTP_OK;
+    r->headers_out.content_length_n = last - p;
+    ngx_str_set(&r->headers_out.content_type, "text/plain; version=0.0.4");
+
+    rc = ngx_http_send_header(r);
+    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+        return rc;
+    }
+
+    b = ngx_calloc_buf(r->pool);
+    if (b == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    b->pos = p;
+    b->last = last;
+    b->memory = 1;
+    b->last_buf = 1;
+
+    out.buf = b;
+    out.next = NULL;
+
+    return ngx_http_output_filter(r, &out);
 }
 
 static ngx_int_t ngx_http_wasm_server_rewrite_handler(ngx_http_request_t *r) {
