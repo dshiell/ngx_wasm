@@ -21,6 +21,8 @@ extern "C" {
 #define NGX_WASM_LOG_INFO 7
 #define NGX_WASM_LOG_DEBUG 8
 
+#define NGX_WASM_SUBREQ_CAPTURE_BODY 0x0001
+
 #if defined(__GNUC__) || defined(__clang__)
 #define NGX_WASM_EXPORT(name) __attribute__((export_name(name)))
 #else
@@ -57,6 +59,23 @@ int ngx_wasm_req_get_header(const void *name_ptr,
                             void *buf_ptr,
                             int buf_len);
 int ngx_wasm_req_get_body(void *buf_ptr, int buf_len);
+int ngx_wasm_subreq_set_header(const void *name_ptr,
+                               int name_len,
+                               const void *value_ptr,
+                               int value_len);
+int ngx_wasm_subreq(const void *uri_ptr,
+                    int uri_len,
+                    const void *args_ptr,
+                    int args_len,
+                    int method,
+                    int options);
+int ngx_wasm_subreq_get_status(void);
+int ngx_wasm_subreq_get_header(const void *name_ptr,
+                               int name_len,
+                               void *buf_ptr,
+                               int buf_len);
+int ngx_wasm_subreq_get_body(void *buf_ptr, int buf_len);
+int ngx_wasm_subreq_get_body_len(void);
 int ngx_wasm_resp_set_header(const void *name_ptr,
                              int name_len,
                              const void *value_ptr,

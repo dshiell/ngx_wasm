@@ -1,4 +1,5 @@
 #include <ngx_http_wasm_abi.h>
+#include <ngx_http_wasm_module_int.h>
 #if (NGX_HTTP_SSL)
 #include <openssl/pem.h>
 #endif
@@ -32,6 +33,24 @@ ngx_http_wasm_abi_resp_get_cached_header(ngx_http_wasm_abi_ctx_t *ctx,
                                          size_t name_len,
                                          u_char *buf,
                                          size_t buf_len);
+static ngx_http_wasm_ctx_t *
+ngx_http_wasm_abi_request_ctx(ngx_http_wasm_abi_ctx_t *ctx);
+static ngx_http_wasm_subrequest_state_t *
+ngx_http_wasm_abi_subrequest_state(ngx_http_wasm_abi_ctx_t *ctx);
+static ngx_int_t ngx_http_wasm_abi_subrequest_copy(ngx_http_request_t *r,
+                                                   ngx_str_t *dst,
+                                                   const u_char *src,
+                                                   size_t len);
+static ngx_int_t ngx_http_wasm_abi_subrequest_set_runtime_header(
+    ngx_http_request_t *r, const ngx_str_t *name, const ngx_str_t *value);
+static ngx_int_t
+ngx_http_wasm_abi_subrequest_clone_headers(ngx_http_request_t *dst,
+                                           ngx_http_request_t *src);
+static ngx_int_t ngx_http_wasm_abi_subrequest_method_name(ngx_uint_t method,
+                                                          ngx_str_t *name);
+static ngx_int_t ngx_http_wasm_abi_subrequest_done(ngx_http_request_t *r,
+                                                   void *data,
+                                                   ngx_int_t rc);
 
 static ngx_int_t ngx_http_wasm_abi_set_str(ngx_http_wasm_abi_ctx_t *ctx,
                                            ngx_str_t *dst,
@@ -367,6 +386,197 @@ static ngx_int_t ngx_http_wasm_abi_copy_bytes(ngx_http_request_t *r,
     dst->len = len;
 
     return NGX_HTTP_WASM_OK;
+}
+
+static ngx_http_wasm_ctx_t *
+ngx_http_wasm_abi_request_ctx(ngx_http_wasm_abi_ctx_t *ctx) {
+    if (ctx == NULL || ctx->request == NULL) {
+        return NULL;
+    }
+
+    return ngx_http_get_module_ctx(ctx->request, ngx_http_wasm_module);
+}
+
+static ngx_http_wasm_subrequest_state_t *
+ngx_http_wasm_abi_subrequest_state(ngx_http_wasm_abi_ctx_t *ctx) {
+    ngx_http_wasm_ctx_t *wctx;
+
+    wctx = ngx_http_wasm_abi_request_ctx(ctx);
+    if (wctx == NULL) {
+        return NULL;
+    }
+
+    wctx->subrequest.request = ctx->request;
+
+    return &wctx->subrequest;
+}
+
+static ngx_int_t ngx_http_wasm_abi_subrequest_copy(ngx_http_request_t *r,
+                                                   ngx_str_t *dst,
+                                                   const u_char *src,
+                                                   size_t len) {
+    return ngx_http_wasm_abi_copy_bytes(r, dst, src, len);
+}
+
+static ngx_int_t ngx_http_wasm_abi_subrequest_set_runtime_header(
+    ngx_http_request_t *r, const ngx_str_t *name, const ngx_str_t *value) {
+    ngx_table_elt_t *h;
+    u_char *lowcase_key;
+    ngx_uint_t hash;
+
+    h = ngx_http_wasm_abi_find_header(r, name->data, name->len);
+    if (h == NULL) {
+        h = ngx_list_push(&r->headers_in.headers);
+        if (h == NULL) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+
+        ngx_memzero(h, sizeof(*h));
+
+        if (ngx_http_wasm_abi_copy_bytes(r, &h->key, name->data, name->len) !=
+            NGX_HTTP_WASM_OK) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+
+        lowcase_key = ngx_pnalloc(r->pool, name->len);
+        if (lowcase_key == NULL) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+
+        hash = ngx_hash_strlow(lowcase_key, h->key.data, name->len);
+        h->hash = hash;
+        h->lowcase_key = lowcase_key;
+    }
+
+    if (ngx_http_wasm_abi_copy_bytes(r, &h->value, value->data, value->len) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return NGX_HTTP_WASM_OK;
+}
+
+static ngx_int_t
+ngx_http_wasm_abi_subrequest_clone_headers(ngx_http_request_t *dst,
+                                           ngx_http_request_t *src) {
+    ngx_list_part_t *part;
+    ngx_table_elt_t *h;
+    ngx_table_elt_t *copy;
+    ngx_uint_t i;
+
+    if (ngx_list_init(
+            &dst->headers_in.headers, dst->pool, 8, sizeof(ngx_table_elt_t)) !=
+        NGX_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    part = &src->headers_in.headers.part;
+    h = part->elts;
+
+    for (i = 0;; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
+
+        copy = ngx_list_push(&dst->headers_in.headers);
+        if (copy == NULL) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+
+        ngx_memzero(copy, sizeof(*copy));
+        copy->hash = h[i].hash;
+
+        if (ngx_http_wasm_abi_copy_bytes(
+                dst, &copy->key, h[i].key.data, h[i].key.len) !=
+            NGX_HTTP_WASM_OK) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+
+        if (ngx_http_wasm_abi_copy_bytes(
+                dst, &copy->value, h[i].value.data, h[i].value.len) !=
+            NGX_HTTP_WASM_OK) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+
+        if (h[i].lowcase_key != NULL) {
+            copy->lowcase_key = ngx_pnalloc(dst->pool, h[i].key.len);
+            if (copy->lowcase_key == NULL) {
+                return NGX_HTTP_WASM_ERROR;
+            }
+
+            ngx_memcpy(copy->lowcase_key, h[i].lowcase_key, h[i].key.len);
+        }
+    }
+
+    return NGX_HTTP_WASM_OK;
+}
+
+static ngx_int_t ngx_http_wasm_abi_subrequest_method_name(ngx_uint_t method,
+                                                          ngx_str_t *name) {
+    switch (method) {
+        case NGX_HTTP_GET:
+            ngx_str_set(name, "GET");
+            return NGX_OK;
+        case NGX_HTTP_HEAD:
+            ngx_str_set(name, "HEAD");
+            return NGX_OK;
+        case NGX_HTTP_POST:
+            ngx_str_set(name, "POST");
+            return NGX_OK;
+        case NGX_HTTP_PUT:
+            ngx_str_set(name, "PUT");
+            return NGX_OK;
+        case NGX_HTTP_DELETE:
+            ngx_str_set(name, "DELETE");
+            return NGX_OK;
+        case NGX_HTTP_PATCH:
+            ngx_str_set(name, "PATCH");
+            return NGX_OK;
+        case NGX_HTTP_OPTIONS:
+            ngx_str_set(name, "OPTIONS");
+            return NGX_OK;
+    }
+
+    return NGX_ERROR;
+}
+
+static ngx_int_t ngx_http_wasm_abi_subrequest_done(ngx_http_request_t *r,
+                                                   void *data,
+                                                   ngx_int_t rc) {
+    ngx_http_wasm_subrequest_state_t *state = data;
+    ngx_buf_t *buf;
+    size_t len;
+
+    if (state == NULL) {
+        return rc;
+    }
+
+    state->subrequest = r;
+    state->rc = rc;
+    state->done = 1;
+    state->active = 0;
+
+    if (!state->capture_body || state->body_limit == 0) {
+        return rc;
+    }
+
+    if (r->out == NULL || r->out->buf == NULL) {
+        return rc;
+    }
+
+    buf = r->out->buf;
+    len = (size_t)(buf->last - buf->pos);
+    if (len > state->body_limit) {
+        state->rc = NGX_ERROR;
+    }
+
+    return rc;
 }
 
 static ngx_table_elt_t *ngx_http_wasm_abi_find_header(ngx_http_request_t *r,
@@ -953,6 +1163,315 @@ ngx_int_t ngx_http_wasm_abi_resp_write(ngx_http_wasm_abi_ctx_t *ctx,
     ctx->body_is_borrowed = !copy;
 
     return NGX_HTTP_WASM_OK;
+}
+
+ngx_int_t ngx_http_wasm_abi_subrequest_set_header(ngx_http_wasm_abi_ctx_t *ctx,
+                                                  const u_char *name,
+                                                  size_t name_len,
+                                                  const u_char *value,
+                                                  size_t value_len) {
+    ngx_http_wasm_subrequest_state_t *state;
+    ngx_http_wasm_subrequest_header_t *header;
+
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SUBREQUEST) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (name_len == 0) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    state = ngx_http_wasm_abi_subrequest_state(ctx);
+    if (state == NULL || state->request == NULL || state->active) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (state->pending_headers == NULL) {
+        state->pending_headers = ngx_array_create(
+            state->request->pool, 2, sizeof(ngx_http_wasm_subrequest_header_t));
+        if (state->pending_headers == NULL) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+    }
+
+    header = ngx_array_push(state->pending_headers);
+    if (header == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ngx_memzero(header, sizeof(*header));
+
+    if (ngx_http_wasm_abi_subrequest_copy(
+            state->request, &header->name, name, name_len) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ngx_http_wasm_abi_subrequest_copy(
+            state->request, &header->value, value, value_len) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return NGX_HTTP_WASM_OK;
+}
+
+ngx_int_t ngx_http_wasm_abi_subrequest(ngx_http_wasm_abi_ctx_t *ctx,
+                                       const u_char *uri,
+                                       size_t uri_len,
+                                       const u_char *args,
+                                       size_t args_len,
+                                       ngx_int_t method,
+                                       ngx_uint_t options) {
+    ngx_http_wasm_subrequest_state_t *state;
+    ngx_http_request_t *r, *sr;
+    ngx_http_post_subrequest_t *ps;
+    ngx_http_wasm_conf_t *wcf;
+    ngx_str_t uri_str, args_str, method_name;
+    ngx_uint_t flags;
+    ngx_uint_t i;
+    ngx_http_wasm_subrequest_header_t *headers;
+
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SUBREQUEST) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ctx->request == NULL || uri_len == 0) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    state = ngx_http_wasm_abi_subrequest_state(ctx);
+    if (state == NULL || state->request == NULL || state->active) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    r = state->request;
+    wcf = ngx_http_get_module_loc_conf(r, ngx_http_wasm_module);
+    if (wcf == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ngx_http_wasm_abi_subrequest_copy(r, &uri_str, uri, uri_len) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (args_len != 0) {
+        if (ngx_http_wasm_abi_subrequest_copy(r, &args_str, args, args_len) !=
+            NGX_HTTP_WASM_OK) {
+            return NGX_HTTP_WASM_ERROR;
+        }
+    } else {
+        ngx_str_null(&args_str);
+    }
+
+    if (method == 0) {
+        method = NGX_HTTP_GET;
+    }
+
+    if (ngx_http_wasm_abi_subrequest_method_name((ngx_uint_t)method,
+                                                 &method_name) != NGX_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ps = ngx_pcalloc(r->pool, sizeof(*ps));
+    if (ps == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ps->handler = ngx_http_wasm_abi_subrequest_done;
+    ps->data = state;
+
+    flags = NGX_HTTP_SUBREQUEST_WAITED;
+    if ((options & NGX_HTTP_WASM_SUBREQ_CAPTURE_BODY) != 0) {
+        flags |= NGX_HTTP_SUBREQUEST_IN_MEMORY;
+    }
+
+    state->capture_body = (options & NGX_HTTP_WASM_SUBREQ_CAPTURE_BODY) != 0;
+    state->done = 0;
+    state->active = 1;
+    state->rc = NGX_OK;
+    state->subrequest = NULL;
+    state->body_limit = wcf->subrequest_buffer_size;
+
+    if (ngx_http_subrequest(
+            r, &uri_str, args_len != 0 ? &args_str : NULL, &sr, ps, flags) !=
+        NGX_OK) {
+        state->active = 0;
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    state->subrequest = sr;
+
+    sr->method = (ngx_uint_t)method;
+    sr->method_name = method_name;
+
+    if (!state->capture_body) {
+        sr->header_only = 1;
+    }
+
+    if (state->pending_headers != NULL && state->pending_headers->nelts != 0) {
+        if (ngx_http_wasm_abi_subrequest_clone_headers(sr, r) !=
+            NGX_HTTP_WASM_OK) {
+            state->active = 0;
+            return NGX_HTTP_WASM_ERROR;
+        }
+
+        headers = state->pending_headers->elts;
+        for (i = 0; i < state->pending_headers->nelts; i++) {
+            if (ngx_http_wasm_abi_subrequest_set_runtime_header(
+                    sr, &headers[i].name, &headers[i].value) !=
+                NGX_HTTP_WASM_OK) {
+                state->active = 0;
+                return NGX_HTTP_WASM_ERROR;
+            }
+        }
+        state->pending_headers->nelts = 0;
+    }
+
+    return NGX_HTTP_WASM_OK;
+}
+
+ngx_int_t
+ngx_http_wasm_abi_subrequest_get_status(ngx_http_wasm_abi_ctx_t *ctx) {
+    ngx_http_wasm_subrequest_state_t *state;
+
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SUBREQUEST) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    state = ngx_http_wasm_abi_subrequest_state(ctx);
+    if (state == NULL || !state->done || state->subrequest == NULL ||
+        state->rc != NGX_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return state->subrequest->headers_out.status;
+}
+
+ngx_int_t ngx_http_wasm_abi_subrequest_get_header(ngx_http_wasm_abi_ctx_t *ctx,
+                                                  const u_char *name,
+                                                  size_t name_len,
+                                                  u_char *buf,
+                                                  size_t buf_len) {
+    ngx_http_wasm_subrequest_state_t *state;
+    ngx_http_request_t *r;
+    ngx_table_elt_t *h;
+    ngx_table_elt_t **slot;
+    ngx_str_t value;
+    size_t copy_len;
+
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SUBREQUEST) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (name_len == 0) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    state = ngx_http_wasm_abi_subrequest_state(ctx);
+    if (state == NULL || !state->done || state->subrequest == NULL ||
+        state->rc != NGX_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    r = state->subrequest;
+    if (ngx_http_wasm_abi_header_eq(name, name_len, "content-type")) {
+        if (r->headers_out.content_type.len == 0) {
+            return NGX_HTTP_WASM_NOT_FOUND;
+        }
+
+        value = r->headers_out.content_type;
+        copy_len = ngx_min(value.len, buf_len);
+        if (copy_len != 0) {
+            ngx_memcpy(buf, value.data, copy_len);
+        }
+
+        return (ngx_int_t)value.len;
+    }
+
+    slot = ngx_http_wasm_abi_resp_header_slot(&r->headers_out, name, name_len);
+    if (slot != NULL && *slot != NULL) {
+        value = (*slot)->value;
+        copy_len = ngx_min(value.len, buf_len);
+        if (copy_len != 0) {
+            ngx_memcpy(buf, value.data, copy_len);
+        }
+
+        return (ngx_int_t)value.len;
+    }
+
+    h = ngx_http_wasm_abi_find_resp_header(r, name, name_len);
+    if (h == NULL) {
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    value = h->value;
+    copy_len = ngx_min(value.len, buf_len);
+    if (copy_len != 0) {
+        ngx_memcpy(buf, value.data, copy_len);
+    }
+
+    return (ngx_int_t)value.len;
+}
+
+ngx_int_t ngx_http_wasm_abi_subrequest_get_body(ngx_http_wasm_abi_ctx_t *ctx,
+                                                u_char *buf,
+                                                size_t buf_len) {
+    ngx_http_wasm_subrequest_state_t *state;
+    ngx_buf_t *body;
+    size_t len, copy_len;
+
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SUBREQUEST) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    state = ngx_http_wasm_abi_subrequest_state(ctx);
+    if (state == NULL || !state->done || state->subrequest == NULL ||
+        state->rc != NGX_OK || !state->capture_body) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (state->subrequest->out == NULL || state->subrequest->out->buf == NULL) {
+        return 0;
+    }
+
+    body = state->subrequest->out->buf;
+    len = (size_t)(body->last - body->pos);
+    copy_len = ngx_min(len, buf_len);
+    if (copy_len != 0) {
+        ngx_memcpy(buf, body->pos, copy_len);
+    }
+
+    return (ngx_int_t)len;
+}
+
+ngx_int_t
+ngx_http_wasm_abi_subrequest_get_body_len(ngx_http_wasm_abi_ctx_t *ctx) {
+    ngx_http_wasm_subrequest_state_t *state;
+
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SUBREQUEST) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    state = ngx_http_wasm_abi_subrequest_state(ctx);
+    if (state == NULL || !state->done || state->subrequest == NULL ||
+        state->rc != NGX_OK || !state->capture_body) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (state->subrequest->out == NULL || state->subrequest->out->buf == NULL) {
+        return 0;
+    }
+
+    return (ngx_int_t)(state->subrequest->out->buf->last -
+                       state->subrequest->out->buf->pos);
 }
 
 ngx_int_t ngx_http_wasm_abi_send_response(ngx_http_wasm_abi_ctx_t *ctx) {

@@ -68,6 +68,16 @@ int ngx_wasm_req_set_header(const void *name_ptr, int name_len,
                             const void *value_ptr, int value_len);
 int ngx_wasm_req_get_header(const void *name_ptr, int name_len,
                             void *buf_ptr, int buf_len);
+int ngx_wasm_subreq_set_header(const void *name_ptr, int name_len,
+                               const void *value_ptr, int value_len);
+int ngx_wasm_subreq(const void *uri_ptr, int uri_len,
+                    const void *args_ptr, int args_len,
+                    int method, int options);
+int ngx_wasm_subreq_get_status(void);
+int ngx_wasm_subreq_get_header(const void *name_ptr, int name_len,
+                               void *buf_ptr, int buf_len);
+int ngx_wasm_subreq_get_body(void *buf_ptr, int buf_len);
+int ngx_wasm_subreq_get_body_len(void);
 int ngx_wasm_ssl_get_server_name(void *buf_ptr, int buf_len);
 int ngx_wasm_ssl_reject_handshake(int alert);
 int ngx_wasm_ssl_set_certificate(const void *cert_ptr, int cert_len,
@@ -146,6 +156,51 @@ Expected semantics:
   - returns `-1` when the header is missing
   - returns `-2` on invalid arguments or host-side failure
 
+- `ngx_wasm_subreq_set_header`
+  - stages a request header for the next subrequest launch
+  - staged headers are consumed by the next successful `ngx_wasm_subreq` call
+  - returns `0` on success
+  - returns `-2` on invalid arguments, missing request context, or host-side
+    failure
+
+- `ngx_wasm_subreq`
+  - launches an nginx-internal subrequest and yields the current guest
+    execution
+  - currently supported only in yieldable request phases
+  - `method == 0` defaults to `GET`
+  - currently supported option flags:
+    - `1`: capture the subrequest response body in memory
+  - returns `0` when launch succeeds
+  - returns `-2` on invalid arguments, a forbidden phase, or host-side failure
+
+- `ngx_wasm_subreq_get_status`
+  - returns the completed subrequest HTTP status
+  - returns `-2` if there is no completed subrequest result
+
+- `ngx_wasm_subreq_get_header`
+  - looks up a response header by case-insensitive name from the most recent
+    completed subrequest
+  - copies up to `buf_len` bytes into `buf_ptr`
+  - returns the full header value length on success, even if truncated by the
+    provided buffer
+  - returns `-1` when the header is missing
+  - returns `-2` if there is no completed subrequest result or on host-side
+    failure
+
+- `ngx_wasm_subreq_get_body`
+  - copies the buffered response body from the most recent completed
+    subrequest into guest memory
+  - body capture is available only when the launch used the
+    `NGX_WASM_SUBREQ_CAPTURE_BODY` option
+  - returns the copied body length on success
+  - returns `-2` if there is no completed buffered body or on host-side
+    failure
+
+- `ngx_wasm_subreq_get_body_len`
+  - returns the buffered response body length from the most recent completed
+    subrequest
+  - returns `-2` if there is no completed buffered body
+
 - `ngx_wasm_resp_write`
   - writes the response body from guest linear memory
   - returns `0` on success
@@ -186,6 +241,7 @@ Current copy policy:
   nginx shared memory zone
 - metrics state is host-owned and shared across workers through an nginx
   shared memory zone
+- subrequest result state is host-owned and request-local
 
 ## Return Conventions
 
@@ -198,9 +254,30 @@ Current conventions:
   which returns the stored length on success
 - metric operations return `0` on success
 - `ngx_wasm_req_get_header` returns a non-negative length on success
+- `ngx_wasm_subreq_get_header` returns a non-negative length on success
+- `ngx_wasm_subreq_get_body` returns a non-negative length on success
+- `ngx_wasm_subreq_get_status` returns a non-negative HTTP status on success
+- `ngx_wasm_subreq_get_body_len` returns a non-negative length on success
 - `ngx_wasm_req_get_header` returns `-1` for missing headers
+- `ngx_wasm_subreq_get_header` returns `-1` for missing response headers
 - `ngx_wasm_shm_get` returns `-1` for missing keys
 - negative/error returns are otherwise reserved for host-side failures
+
+## Current Subrequest Limitations
+
+- subrequests are nginx-internal only; this is not an outbound fetch API
+- only one guest-visible active subrequest is supported per parent request
+- only `rewrite_by_wasm`, `access_by_wasm`, and `content_by_wasm` currently
+  expose subrequest capability
+- subrequests are integrated with the existing manual-yield continuation model
+  rather than stackful execution
+- guests must preserve their own phase-local state across resume if they need
+  to continue after `ngx_wasm_subreq`
+- response body capture is fully buffered in memory and limited by
+  `wasm_subrequest_buffer_size`
+- if body capture is not requested, only status and headers are available
+- `log_by_wasm`, filter hooks, SSL hooks, lifecycle hooks, and timer hooks do
+  not allow subrequest launch
 
 ## Current Shared Memory KV Limitations
 

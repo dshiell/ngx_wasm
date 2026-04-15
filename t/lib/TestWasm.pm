@@ -40,6 +40,12 @@ our @EXPORT_OK = qw(
     resp_body_append_eof_wasm
     resp_body_window_ab_to_x_wasm
     access_auth_gate_wasm
+    subreq_body_echo_wasm
+    subreq_header_echo_wasm
+    subreq_method_post_wasm
+    subreq_status_404_wasm
+    subreq_rewrite_auth_wasm
+    subreq_forbidden_wasm
     missing_export_wasm
     missing_memory_wasm
     guest_trap_wasm
@@ -183,6 +189,30 @@ sub resp_body_window_ab_to_x_wasm {
 
 sub access_auth_gate_wasm {
     return wasm_root() . "/wasm/http-guests/build/access_auth_gate.wasm";
+}
+
+sub subreq_body_echo_wasm {
+    return wasm_root() . "/wasm/http-guests/src/subreq_body_echo.wat";
+}
+
+sub subreq_header_echo_wasm {
+    return wasm_root() . "/wasm/http-guests/src/subreq_header_echo.wat";
+}
+
+sub subreq_method_post_wasm {
+    return wasm_root() . "/wasm/http-guests/src/subreq_method_post.wat";
+}
+
+sub subreq_status_404_wasm {
+    return wasm_root() . "/wasm/http-guests/src/subreq_status_404.wat";
+}
+
+sub subreq_rewrite_auth_wasm {
+    return wasm_root() . "/wasm/http-guests/src/subreq_rewrite_auth.wat";
+}
+
+sub subreq_forbidden_wasm {
+    return wasm_root() . "/wasm/http-guests/src/subreq_forbidden.wat";
 }
 
 sub missing_export_wasm {
