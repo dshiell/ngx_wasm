@@ -333,7 +333,7 @@ ngx_int_t ngx_http_wasm_abi_log(ngx_http_wasm_abi_ctx_t *ctx,
                                 ngx_uint_t level,
                                 const u_char *data,
                                 size_t len) {
-    if (level < NGX_LOG_STDERR || level > NGX_LOG_DEBUG) {
+    if (level > NGX_LOG_DEBUG) {
         return NGX_HTTP_WASM_ERROR;
     }
 
