@@ -10,12 +10,27 @@
 #include <ngx_http_wasm_metrics.h>
 #include <ngx_http_wasm_runtime.h>
 #include <ngx_http_wasm_shm.h>
+#include <ngx_http_upstream_round_robin.h>
 
 static ngx_int_t ngx_http_wasm_content_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_metrics_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_server_rewrite_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_rewrite_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_wasm_log_handler(ngx_http_request_t *r);
+static ngx_int_t ngx_http_wasm_upstream_init(ngx_conf_t *cf,
+                                             ngx_http_upstream_srv_conf_t *us);
+static ngx_int_t
+ngx_http_wasm_upstream_init_peer(ngx_http_request_t *r,
+                                 ngx_http_upstream_srv_conf_t *us);
+static ngx_int_t ngx_http_wasm_upstream_get_peer(ngx_peer_connection_t *pc,
+                                                 void *data);
+static void ngx_http_wasm_upstream_free_peer(ngx_peer_connection_t *pc,
+                                             void *data,
+                                             ngx_uint_t state);
+static ngx_int_t
+ngx_http_wasm_balancer_select_peer(ngx_peer_connection_t *pc,
+                                   ngx_http_wasm_balancer_peer_data_t *bpd,
+                                   ngx_uint_t peer_index);
 static ngx_int_t ngx_http_wasm_run_request(ngx_http_request_t *r,
                                            ngx_http_wasm_ctx_t *ctx);
 static void
@@ -44,6 +59,8 @@ static char *
 ngx_http_wasm_content_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_server_rewrite_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *
+ngx_http_wasm_balancer_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
 ngx_http_wasm_header_filter_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *
@@ -123,6 +140,13 @@ static ngx_command_t ngx_http_wasm_commands[] = {
     {ngx_string("server_rewrite_by_wasm"),
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_CONF_TAKE2,
      ngx_http_wasm_server_rewrite_by,
+     NGX_HTTP_SRV_CONF_OFFSET,
+     0,
+     NULL},
+
+    {ngx_string("balancer_by_wasm"),
+     NGX_HTTP_UPS_CONF | NGX_CONF_TAKE2,
+     ngx_http_wasm_balancer_by,
      NGX_HTTP_SRV_CONF_OFFSET,
      0,
      NULL},
@@ -281,6 +305,7 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     conf->content.set = NGX_CONF_UNSET;
     conf->rewrite.set = NGX_CONF_UNSET;
     conf->server_rewrite.set = NGX_CONF_UNSET;
+    conf->balancer.set = NGX_CONF_UNSET;
     conf->header_filter.set = NGX_CONF_UNSET;
     conf->body_filter.set = NGX_CONF_UNSET;
     conf->log.set = NGX_CONF_UNSET;
@@ -292,6 +317,8 @@ static void *ngx_http_wasm_create_conf(ngx_conf_t *cf) {
     conf->body_filter_file_chunk_size = NGX_CONF_UNSET_SIZE;
     conf->subrequest_buffer_size = NGX_CONF_UNSET_SIZE;
     conf->metrics_endpoint = NGX_CONF_UNSET;
+    conf->original_init_upstream = NULL;
+    conf->original_init_peer = NULL;
 
     return conf;
 }
@@ -323,6 +350,7 @@ static char *ngx_http_wasm_merge_conf(ngx_conf_t *cf,
     ngx_http_wasm_merge_phase_conf(&parent->rewrite, &child->rewrite);
     ngx_http_wasm_merge_phase_conf(&parent->server_rewrite,
                                    &child->server_rewrite);
+    ngx_http_wasm_merge_phase_conf(&parent->balancer, &child->balancer);
     ngx_http_wasm_merge_phase_conf(&parent->header_filter,
                                    &child->header_filter);
     ngx_http_wasm_merge_phase_conf(&parent->body_filter, &child->body_filter);
@@ -706,6 +734,34 @@ static char *ngx_http_wasm_server_rewrite_by(ngx_conf_t *cf,
         default:
             return NGX_CONF_ERROR;
     }
+}
+
+static char *
+ngx_http_wasm_balancer_by(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    ngx_http_wasm_conf_t *wcf;
+    ngx_http_upstream_srv_conf_t *uscf;
+
+    (void)cmd;
+    wcf = conf;
+
+    switch (ngx_http_wasm_configure_phase(cf, &wcf->balancer)) {
+        case NGX_OK:
+            break;
+        case NGX_DECLINED:
+            return "is duplicate";
+        default:
+            return NGX_CONF_ERROR;
+    }
+
+    uscf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_upstream_module);
+    if (uscf == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    wcf->original_init_upstream = uscf->peer.init_upstream;
+    uscf->peer.init_upstream = ngx_http_wasm_upstream_init;
+
+    return NGX_CONF_OK;
 }
 
 static char *
@@ -1098,6 +1154,244 @@ static ngx_int_t ngx_http_wasm_log_handler(ngx_http_request_t *r) {
 
     ngx_http_wasm_runtime_cleanup_exec_ctx(&ctx->log_exec);
     ctx->log_exec_set = 0;
+
+    return NGX_OK;
+}
+
+static ngx_int_t ngx_http_wasm_upstream_init(ngx_conf_t *cf,
+                                             ngx_http_upstream_srv_conf_t *us) {
+    ngx_http_wasm_conf_t *wcf;
+    ngx_int_t rc;
+
+    wcf = ngx_http_conf_upstream_srv_conf(us, ngx_http_wasm_module);
+    if (wcf == NULL || wcf->balancer.set != 1) {
+        return NGX_ERROR;
+    }
+
+    if (wcf->original_init_upstream != NULL) {
+        rc = wcf->original_init_upstream(cf, us);
+    } else {
+        rc = ngx_http_upstream_init_round_robin(cf, us);
+    }
+
+    if (rc != NGX_OK) {
+        return rc;
+    }
+
+    wcf->original_init_peer = us->peer.init;
+    us->peer.init = ngx_http_wasm_upstream_init_peer;
+
+    return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_wasm_upstream_init_peer(ngx_http_request_t *r,
+                                 ngx_http_upstream_srv_conf_t *us) {
+    ngx_http_wasm_balancer_peer_data_t *bpd;
+    ngx_http_wasm_conf_t *wcf;
+    ngx_http_wasm_main_conf_t *wmcf;
+    ngx_int_t rc;
+
+    wcf = ngx_http_conf_upstream_srv_conf(us, ngx_http_wasm_module);
+    wmcf = ngx_http_get_module_main_conf(r, ngx_http_wasm_module);
+
+    if (wcf == NULL || wcf->balancer.set != 1 || wmcf == NULL ||
+        wmcf->runtime == NULL || wcf->original_init_peer == NULL) {
+        return NGX_ERROR;
+    }
+
+    bpd = ngx_pcalloc(r->pool, sizeof(*bpd));
+    if (bpd == NULL) {
+        return NGX_ERROR;
+    }
+
+    rc = wcf->original_init_peer(r, us);
+    if (rc != NGX_OK) {
+        return rc;
+    }
+
+    bpd->request = r;
+    bpd->conf = &wcf->balancer;
+    bpd->runtime = wmcf->runtime;
+    bpd->fuel_limit = (wcf->fuel_limit == NGX_CONF_UNSET_UINT)
+                          ? NGX_HTTP_WASM_DEFAULT_FUEL_LIMIT
+                          : wcf->fuel_limit;
+    bpd->original_data = r->upstream->peer.data;
+    bpd->original_get_peer = r->upstream->peer.get;
+    bpd->original_free_peer = r->upstream->peer.free;
+
+    r->upstream->peer.data = bpd;
+    r->upstream->peer.get = ngx_http_wasm_upstream_get_peer;
+    r->upstream->peer.free = ngx_http_wasm_upstream_free_peer;
+
+    return NGX_OK;
+}
+
+static ngx_int_t ngx_http_wasm_upstream_get_peer(ngx_peer_connection_t *pc,
+                                                 void *data) {
+    ngx_http_wasm_balancer_peer_data_t *bpd = data;
+    ngx_http_wasm_exec_ctx_t exec;
+    ngx_int_t rc;
+
+    if (bpd == NULL || bpd->request == NULL || bpd->conf == NULL ||
+        bpd->runtime == NULL) {
+        return NGX_ERROR;
+    }
+
+    ngx_log_error(NGX_LOG_NOTICE,
+                  bpd->request->connection->log,
+                  0,
+                  "ngx_wasm: balancer handler module=\"%V\" export=\"%V\"",
+                  &bpd->conf->module_path,
+                  &bpd->conf->export_name);
+
+    ngx_http_wasm_runtime_init_exec_ctx(&exec,
+                                        bpd->request,
+                                        bpd->conf,
+                                        NGX_HTTP_WASM_PHASE_BALANCER,
+                                        bpd->runtime);
+    exec.fuel_limit = bpd->fuel_limit;
+    exec.timeslice_fuel = 0;
+    exec.fuel_remaining = bpd->fuel_limit;
+
+    rc = ngx_http_wasm_runtime_run(&exec);
+    ngx_http_wasm_runtime_cleanup_exec_ctx(&exec);
+
+    if (rc != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (!exec.abi.balancer_peer_set) {
+        return bpd->original_get_peer(pc, bpd->original_data);
+    }
+
+    return ngx_http_wasm_balancer_select_peer(
+        pc, bpd, exec.abi.balancer_peer_index);
+}
+
+static void ngx_http_wasm_upstream_free_peer(ngx_peer_connection_t *pc,
+                                             void *data,
+                                             ngx_uint_t state) {
+    ngx_http_wasm_balancer_peer_data_t *bpd = data;
+
+    if (bpd == NULL || bpd->original_free_peer == NULL) {
+        return;
+    }
+
+    bpd->original_free_peer(pc, bpd->original_data, state);
+}
+
+static ngx_int_t
+ngx_http_wasm_balancer_select_peer(ngx_peer_connection_t *pc,
+                                   ngx_http_wasm_balancer_peer_data_t *bpd,
+                                   ngx_uint_t peer_index) {
+    ngx_http_upstream_rr_peer_data_t *rrp;
+    ngx_http_upstream_rr_peers_t *peers;
+    ngx_http_upstream_rr_peer_t *peer;
+    uintptr_t m;
+    ngx_uint_t i;
+    ngx_uint_t n;
+    time_t now;
+
+    rrp = bpd->original_data;
+    if (rrp == NULL || rrp->peers == NULL) {
+        return NGX_ERROR;
+    }
+
+    peers = rrp->peers;
+    pc->cached = 0;
+    pc->connection = NULL;
+
+    ngx_http_upstream_rr_peers_wlock(peers);
+
+#if (NGX_HTTP_UPSTREAM_ZONE)
+    if (peers->config && rrp->config != *peers->config) {
+        ngx_http_upstream_rr_peers_unlock(peers);
+        return NGX_BUSY;
+    }
+#endif
+
+    for (peer = peers->peer, i = 0; peer != NULL; peer = peer->next, i++) {
+        if (i == peer_index) {
+            break;
+        }
+    }
+
+    if (peer == NULL) {
+        ngx_http_upstream_rr_peers_unlock(peers);
+        ngx_log_error(NGX_LOG_ERR,
+                      pc->log,
+                      0,
+                      "ngx_wasm: invalid balancer peer index %ui",
+                      peer_index);
+        return NGX_ERROR;
+    }
+
+    n = peer_index / (8 * sizeof(uintptr_t));
+    m = (uintptr_t)1 << (peer_index % (8 * sizeof(uintptr_t)));
+
+    if (rrp->tried[n] & m) {
+        ngx_http_upstream_rr_peers_unlock(peers);
+        ngx_log_error(NGX_LOG_ERR,
+                      pc->log,
+                      0,
+                      "ngx_wasm: balancer peer %ui already tried",
+                      peer_index);
+        return NGX_BUSY;
+    }
+
+    ngx_http_upstream_rr_peer_lock(peers, peer);
+
+    if (peer->down) {
+        ngx_http_upstream_rr_peer_unlock(peers, peer);
+        ngx_http_upstream_rr_peers_unlock(peers);
+        ngx_log_error(NGX_LOG_ERR,
+                      pc->log,
+                      0,
+                      "ngx_wasm: selected balancer peer %ui is down",
+                      peer_index);
+        return NGX_BUSY;
+    }
+
+    now = ngx_time();
+    if (peer->max_fails && peer->fails >= peer->max_fails &&
+        now - peer->checked <= peer->fail_timeout) {
+        ngx_http_upstream_rr_peer_unlock(peers, peer);
+        ngx_http_upstream_rr_peers_unlock(peers);
+        ngx_log_error(NGX_LOG_ERR,
+                      pc->log,
+                      0,
+                      "ngx_wasm: selected balancer peer %ui is unavailable",
+                      peer_index);
+        return NGX_BUSY;
+    }
+
+    if (peer->max_conns && peer->conns >= peer->max_conns) {
+        ngx_http_upstream_rr_peer_unlock(peers, peer);
+        ngx_http_upstream_rr_peers_unlock(peers);
+        ngx_log_error(NGX_LOG_ERR,
+                      pc->log,
+                      0,
+                      "ngx_wasm: selected balancer peer %ui is saturated",
+                      peer_index);
+        return NGX_BUSY;
+    }
+
+    rrp->current = peer;
+    ngx_http_upstream_rr_peer_ref(peers, peer);
+    rrp->tried[n] |= m;
+
+    if (now - peer->checked > peer->fail_timeout) {
+        peer->checked = now;
+    }
+
+    pc->sockaddr = peer->sockaddr;
+    pc->socklen = peer->socklen;
+    pc->name = &peer->name;
+    peer->conns++;
+
+    ngx_http_upstream_rr_peer_unlock(peers, peer);
+    ngx_http_upstream_rr_peers_unlock(peers);
 
     return NGX_OK;
 }

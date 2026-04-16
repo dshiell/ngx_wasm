@@ -2,10 +2,13 @@
 #define _NGX_HTTP_WASM_MODULE_INT_H_INCLUDED_
 
 #include <ngx_http_wasm_runtime.h>
+#include <ngx_http_upstream_round_robin.h>
 
 typedef struct ngx_http_wasm_ctx_s ngx_http_wasm_ctx_t;
 typedef struct ngx_http_wasm_subrequest_state_s
     ngx_http_wasm_subrequest_state_t;
+typedef struct ngx_http_wasm_balancer_peer_data_s
+    ngx_http_wasm_balancer_peer_data_t;
 typedef void (*ngx_http_wasm_write_event_handler_pt)(ngx_http_request_t *r);
 
 typedef struct {
@@ -22,6 +25,16 @@ struct ngx_http_wasm_subrequest_state_s {
     ngx_uint_t done;
     ngx_int_t rc;
     size_t body_limit;
+};
+
+struct ngx_http_wasm_balancer_peer_data_s {
+    ngx_http_request_t *request;
+    ngx_http_wasm_phase_conf_t *conf;
+    ngx_http_wasm_runtime_state_t *runtime;
+    ngx_uint_t fuel_limit;
+    void *original_data;
+    ngx_event_get_peer_pt original_get_peer;
+    ngx_event_free_peer_pt original_free_peer;
 };
 
 struct ngx_http_wasm_ctx_s {
