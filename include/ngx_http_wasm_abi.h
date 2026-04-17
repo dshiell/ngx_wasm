@@ -165,11 +165,28 @@ ngx_int_t ngx_http_wasm_abi_shm_get(ngx_http_wasm_abi_ctx_t *ctx,
                                     size_t key_len,
                                     u_char *buf,
                                     size_t buf_len);
+ngx_int_t ngx_http_wasm_abi_shm_exists(ngx_http_wasm_abi_ctx_t *ctx,
+                                       const u_char *key,
+                                       size_t key_len);
+ngx_int_t ngx_http_wasm_abi_shm_incr(ngx_http_wasm_abi_ctx_t *ctx,
+                                     const u_char *key,
+                                     size_t key_len,
+                                     ngx_int_t delta);
 ngx_int_t ngx_http_wasm_abi_shm_set(ngx_http_wasm_abi_ctx_t *ctx,
                                     const u_char *key,
                                     size_t key_len,
                                     const u_char *value,
                                     size_t value_len);
+ngx_int_t ngx_http_wasm_abi_shm_add(ngx_http_wasm_abi_ctx_t *ctx,
+                                    const u_char *key,
+                                    size_t key_len,
+                                    const u_char *value,
+                                    size_t value_len);
+ngx_int_t ngx_http_wasm_abi_shm_replace(ngx_http_wasm_abi_ctx_t *ctx,
+                                        const u_char *key,
+                                        size_t key_len,
+                                        const u_char *value,
+                                        size_t value_len);
 ngx_int_t ngx_http_wasm_abi_shm_delete(ngx_http_wasm_abi_ctx_t *ctx,
                                        const u_char *key,
                                        size_t key_len);

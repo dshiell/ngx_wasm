@@ -193,12 +193,36 @@ static wasm_trap_t *ngx_http_wasm_host_shm_get(void *env,
                                                size_t nargs,
                                                wasmtime_val_t *results,
                                                size_t nresults);
+static wasm_trap_t *ngx_http_wasm_host_shm_exists(void *env,
+                                                  wasmtime_caller_t *caller,
+                                                  const wasmtime_val_t *args,
+                                                  size_t nargs,
+                                                  wasmtime_val_t *results,
+                                                  size_t nresults);
+static wasm_trap_t *ngx_http_wasm_host_shm_incr(void *env,
+                                                wasmtime_caller_t *caller,
+                                                const wasmtime_val_t *args,
+                                                size_t nargs,
+                                                wasmtime_val_t *results,
+                                                size_t nresults);
 static wasm_trap_t *ngx_http_wasm_host_shm_set(void *env,
                                                wasmtime_caller_t *caller,
                                                const wasmtime_val_t *args,
                                                size_t nargs,
                                                wasmtime_val_t *results,
                                                size_t nresults);
+static wasm_trap_t *ngx_http_wasm_host_shm_add(void *env,
+                                               wasmtime_caller_t *caller,
+                                               const wasmtime_val_t *args,
+                                               size_t nargs,
+                                               wasmtime_val_t *results,
+                                               size_t nresults);
+static wasm_trap_t *ngx_http_wasm_host_shm_replace(void *env,
+                                                   wasmtime_caller_t *caller,
+                                                   const wasmtime_val_t *args,
+                                                   size_t nargs,
+                                                   wasmtime_val_t *results,
+                                                   size_t nresults);
 static wasm_trap_t *ngx_http_wasm_host_shm_delete(void *env,
                                                   wasmtime_caller_t *caller,
                                                   const wasmtime_val_t *args,
@@ -925,10 +949,47 @@ ngx_http_wasm_runtime_define_host_funcs(ngx_http_wasm_runtime_state_t *rt) {
         return NGX_ERROR;
     }
 
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_shm_exists",
+            wasm_functype_new_2_1(wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32)),
+            ngx_http_wasm_host_shm_exists) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_shm_incr",
+            wasm_functype_new_3_1(wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32)),
+            ngx_http_wasm_host_shm_incr) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
     if (ngx_http_wasm_runtime_define_func(rt,
                                           "ngx_wasm_shm_set",
                                           ngx_http_wasm_runtime_functype_4_1(),
                                           ngx_http_wasm_host_shm_set) !=
+        NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_define_func(rt,
+                                          "ngx_wasm_shm_add",
+                                          ngx_http_wasm_runtime_functype_4_1(),
+                                          ngx_http_wasm_host_shm_add) !=
+        NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_define_func(rt,
+                                          "ngx_wasm_shm_replace",
+                                          ngx_http_wasm_runtime_functype_4_1(),
+                                          ngx_http_wasm_host_shm_replace) !=
         NGX_OK) {
         return NGX_ERROR;
     }
@@ -1961,6 +2022,92 @@ static wasm_trap_t *ngx_http_wasm_host_shm_get(void *env,
     return NULL;
 }
 
+static wasm_trap_t *ngx_http_wasm_host_shm_exists(void *env,
+                                                  wasmtime_caller_t *caller,
+                                                  const wasmtime_val_t *args,
+                                                  size_t nargs,
+                                                  wasmtime_val_t *results,
+                                                  size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+    const u_char *key;
+    wasm_trap_t *trap;
+
+    (void)env;
+
+    if (nargs != 2 || nresults != 1 || args[0].kind != WASMTIME_I32 ||
+        args[1].kind != WASMTIME_I32) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_shm_exists signature");
+    }
+
+    if (args[0].of.i32 < 0 || args[1].of.i32 < 0) {
+        results[0].kind = WASMTIME_I32;
+        results[0].of.i32 = NGX_HTTP_WASM_ERROR;
+        return NULL;
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory(
+        caller, (uint32_t)args[0].of.i32, (uint32_t)args[1].of.i32, &key);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    if ((ctx->abi.capabilities & NGX_HTTP_WASM_ABI_CAP_SHARED_KV) == 0) {
+        return ngx_http_wasm_runtime_phase_forbidden(
+            "ngx_wasm_shm_exists not allowed in this phase");
+    }
+
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 =
+        ngx_http_wasm_abi_shm_exists(&ctx->abi, key, (size_t)args[1].of.i32);
+
+    return NULL;
+}
+
+static wasm_trap_t *ngx_http_wasm_host_shm_incr(void *env,
+                                                wasmtime_caller_t *caller,
+                                                const wasmtime_val_t *args,
+                                                size_t nargs,
+                                                wasmtime_val_t *results,
+                                                size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+    const u_char *key;
+    wasm_trap_t *trap;
+
+    (void)env;
+
+    if (nargs != 3 || nresults != 1 || args[0].kind != WASMTIME_I32 ||
+        args[1].kind != WASMTIME_I32 || args[2].kind != WASMTIME_I32) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_shm_incr signature");
+    }
+
+    if (args[0].of.i32 < 0 || args[1].of.i32 < 0) {
+        results[0].kind = WASMTIME_I32;
+        results[0].of.i32 = NGX_HTTP_WASM_ERROR;
+        return NULL;
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory(
+        caller, (uint32_t)args[0].of.i32, (uint32_t)args[1].of.i32, &key);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    if ((ctx->abi.capabilities & NGX_HTTP_WASM_ABI_CAP_SHARED_KV) == 0) {
+        return ngx_http_wasm_runtime_phase_forbidden(
+            "ngx_wasm_shm_incr not allowed in this phase");
+    }
+
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 = ngx_http_wasm_abi_shm_incr(
+        &ctx->abi, key, (size_t)args[1].of.i32, args[2].of.i32);
+
+    return NULL;
+}
+
 static wasm_trap_t *ngx_http_wasm_host_shm_set(void *env,
                                                wasmtime_caller_t *caller,
                                                const wasmtime_val_t *args,
@@ -2008,6 +2155,110 @@ static wasm_trap_t *ngx_http_wasm_host_shm_set(void *env,
 
     results[0].kind = WASMTIME_I32;
     results[0].of.i32 = ngx_http_wasm_abi_shm_set(
+        &ctx->abi, key, (size_t)args[1].of.i32, value, (size_t)args[3].of.i32);
+
+    return NULL;
+}
+
+static wasm_trap_t *ngx_http_wasm_host_shm_add(void *env,
+                                               wasmtime_caller_t *caller,
+                                               const wasmtime_val_t *args,
+                                               size_t nargs,
+                                               wasmtime_val_t *results,
+                                               size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+    const u_char *key;
+    const u_char *value;
+    wasm_trap_t *trap;
+
+    (void)env;
+
+    if (nargs != 4 || nresults != 1 || args[0].kind != WASMTIME_I32 ||
+        args[1].kind != WASMTIME_I32 || args[2].kind != WASMTIME_I32 ||
+        args[3].kind != WASMTIME_I32) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_shm_add signature");
+    }
+
+    if (args[0].of.i32 < 0 || args[1].of.i32 < 0 || args[2].of.i32 < 0 ||
+        args[3].of.i32 < 0) {
+        results[0].kind = WASMTIME_I32;
+        results[0].of.i32 = NGX_HTTP_WASM_ERROR;
+        return NULL;
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory(
+        caller, (uint32_t)args[0].of.i32, (uint32_t)args[1].of.i32, &key);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory(
+        caller, (uint32_t)args[2].of.i32, (uint32_t)args[3].of.i32, &value);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    if ((ctx->abi.capabilities & NGX_HTTP_WASM_ABI_CAP_SHARED_KV) == 0) {
+        return ngx_http_wasm_runtime_phase_forbidden(
+            "ngx_wasm_shm_add not allowed in this phase");
+    }
+
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 = ngx_http_wasm_abi_shm_add(
+        &ctx->abi, key, (size_t)args[1].of.i32, value, (size_t)args[3].of.i32);
+
+    return NULL;
+}
+
+static wasm_trap_t *ngx_http_wasm_host_shm_replace(void *env,
+                                                   wasmtime_caller_t *caller,
+                                                   const wasmtime_val_t *args,
+                                                   size_t nargs,
+                                                   wasmtime_val_t *results,
+                                                   size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+    const u_char *key;
+    const u_char *value;
+    wasm_trap_t *trap;
+
+    (void)env;
+
+    if (nargs != 4 || nresults != 1 || args[0].kind != WASMTIME_I32 ||
+        args[1].kind != WASMTIME_I32 || args[2].kind != WASMTIME_I32 ||
+        args[3].kind != WASMTIME_I32) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_shm_replace signature");
+    }
+
+    if (args[0].of.i32 < 0 || args[1].of.i32 < 0 || args[2].of.i32 < 0 ||
+        args[3].of.i32 < 0) {
+        results[0].kind = WASMTIME_I32;
+        results[0].of.i32 = NGX_HTTP_WASM_ERROR;
+        return NULL;
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory(
+        caller, (uint32_t)args[0].of.i32, (uint32_t)args[1].of.i32, &key);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory(
+        caller, (uint32_t)args[2].of.i32, (uint32_t)args[3].of.i32, &value);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    if ((ctx->abi.capabilities & NGX_HTTP_WASM_ABI_CAP_SHARED_KV) == 0) {
+        return ngx_http_wasm_runtime_phase_forbidden(
+            "ngx_wasm_shm_replace not allowed in this phase");
+    }
+
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 = ngx_http_wasm_abi_shm_replace(
         &ctx->abi, key, (size_t)args[1].of.i32, value, (size_t)args[3].of.i32);
 
     return NULL;

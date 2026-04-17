@@ -58,8 +58,14 @@ int ngx_wasm_log(int level, const void *ptr, int len);
 int ngx_wasm_resp_set_status(int status);
 int ngx_wasm_shm_get(const void *key_ptr, int key_len,
                      void *buf_ptr, int buf_len);
+int ngx_wasm_shm_exists(const void *key_ptr, int key_len);
+int ngx_wasm_shm_incr(const void *key_ptr, int key_len, int delta);
 int ngx_wasm_shm_set(const void *key_ptr, int key_len,
                      const void *value_ptr, int value_len);
+int ngx_wasm_shm_add(const void *key_ptr, int key_len,
+                     const void *value_ptr, int value_len);
+int ngx_wasm_shm_replace(const void *key_ptr, int key_len,
+                         const void *value_ptr, int value_len);
 int ngx_wasm_shm_delete(const void *key_ptr, int key_len);
 int ngx_wasm_metric_counter_inc(const void *name_ptr, int name_len, int delta);
 int ngx_wasm_metric_gauge_set(const void *name_ptr, int name_len, int value);
@@ -113,10 +119,35 @@ Expected semantics:
   - returns `-1` when the key is missing
   - returns `-2` on invalid arguments, missing zone, or host-side failure
 
+- `ngx_wasm_shm_exists`
+  - checks whether a key is present in the configured `wasm_shm_zone`
+  - returns `1` when present and `0` when missing
+  - returns `-2` on invalid arguments, missing zone, or host-side failure
+
+- `ngx_wasm_shm_incr`
+  - atomically adds `delta` to an existing shared-memory value
+  - the stored value must be an ASCII base-10 signed 32-bit integer with an
+    optional leading `-`
+  - returns the new integer value on success
+  - returns `-2` on invalid arguments, missing keys, non-integer values,
+    overflow, missing zone, or host-side failure
+
 - `ngx_wasm_shm_set`
   - inserts or replaces a byte-string value in the configured `wasm_shm_zone`
   - keys and values are compared and stored byte-for-byte
   - returns `0` on success
+  - returns `-2` on invalid arguments, missing zone, or allocation failure
+
+- `ngx_wasm_shm_add`
+  - inserts a byte-string value only when the key is absent
+  - returns `0` on success
+  - returns `-1` when the key already exists
+  - returns `-2` on invalid arguments, missing zone, or allocation failure
+
+- `ngx_wasm_shm_replace`
+  - replaces a byte-string value only when the key is already present
+  - returns `0` on success
+  - returns `-1` when the key is missing
   - returns `-2` on invalid arguments, missing zone, or allocation failure
 
 - `ngx_wasm_shm_delete`
@@ -316,18 +347,20 @@ Current conventions:
 - guest export returns `0` on success
 - non-zero guest return values are treated as execution failure
 - host import functions return `0` on success
-- shared-memory operations return `0` on success except `ngx_wasm_shm_get`,
-  which returns the stored length on success
+- `ngx_wasm_shm_get`, `ngx_wasm_req_get_header`, `ngx_wasm_subreq_get_header`,
+  and `ngx_wasm_subreq_get_body` return a non-negative length on success
+- `ngx_wasm_shm_exists` returns `1` when present and `0` when missing
+- `ngx_wasm_shm_incr` returns the updated signed integer value on success
+- other shared-memory operations return `0` on success
 - metric operations return `0` on success
-- `ngx_wasm_req_get_header` returns a non-negative length on success
 - `ngx_wasm_balancer_set_peer` returns `0` on success
-- `ngx_wasm_subreq_get_header` returns a non-negative length on success
-- `ngx_wasm_subreq_get_body` returns a non-negative length on success
 - `ngx_wasm_subreq_get_status` returns a non-negative HTTP status on success
 - `ngx_wasm_subreq_get_body_len` returns a non-negative length on success
 - `ngx_wasm_req_get_header` returns `-1` for missing headers
 - `ngx_wasm_subreq_get_header` returns `-1` for missing response headers
 - `ngx_wasm_shm_get` returns `-1` for missing keys
+- `ngx_wasm_shm_add` and `ngx_wasm_shm_replace` return `-1` for unmet
+  existence preconditions
 - negative/error returns are otherwise reserved for host-side failures
 
 ## Current Subrequest Limitations
@@ -364,7 +397,8 @@ Current conventions:
 - keys and values are opaque bytes with byte-for-byte comparison
 - maximum key length is currently `256` bytes
 - maximum value length is currently `65535` bytes
-- no TTL, eviction, atomic increment, or list operations yet
+- `shm_incr` currently parses only signed 32-bit decimal ASCII values
+- no TTL, eviction, compare-and-set, or list operations yet
 - data survives nginx reload while the zone remains configured, but not a full
   nginx restart
 

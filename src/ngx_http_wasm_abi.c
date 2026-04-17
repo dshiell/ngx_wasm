@@ -730,6 +730,29 @@ ngx_int_t ngx_http_wasm_abi_shm_get(ngx_http_wasm_abi_ctx_t *ctx,
     return ngx_http_wasm_shm_get(ctx->shm_zone, key, key_len, buf, buf_len);
 }
 
+ngx_int_t ngx_http_wasm_abi_shm_exists(ngx_http_wasm_abi_ctx_t *ctx,
+                                       const u_char *key,
+                                       size_t key_len) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SHARED_KV) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_shm_exists(ctx->shm_zone, key, key_len);
+}
+
+ngx_int_t ngx_http_wasm_abi_shm_incr(ngx_http_wasm_abi_ctx_t *ctx,
+                                     const u_char *key,
+                                     size_t key_len,
+                                     ngx_int_t delta) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SHARED_KV) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_shm_incr(ctx->shm_zone, key, key_len, delta);
+}
+
 ngx_int_t ngx_http_wasm_abi_shm_set(ngx_http_wasm_abi_ctx_t *ctx,
                                     const u_char *key,
                                     size_t key_len,
@@ -741,6 +764,33 @@ ngx_int_t ngx_http_wasm_abi_shm_set(ngx_http_wasm_abi_ctx_t *ctx,
     }
 
     return ngx_http_wasm_shm_set(ctx->shm_zone, key, key_len, value, value_len);
+}
+
+ngx_int_t ngx_http_wasm_abi_shm_add(ngx_http_wasm_abi_ctx_t *ctx,
+                                    const u_char *key,
+                                    size_t key_len,
+                                    const u_char *value,
+                                    size_t value_len) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SHARED_KV) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_shm_add(ctx->shm_zone, key, key_len, value, value_len);
+}
+
+ngx_int_t ngx_http_wasm_abi_shm_replace(ngx_http_wasm_abi_ctx_t *ctx,
+                                        const u_char *key,
+                                        size_t key_len,
+                                        const u_char *value,
+                                        size_t value_len) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SHARED_KV) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_shm_replace(
+        ctx->shm_zone, key, key_len, value, value_len);
 }
 
 ngx_int_t ngx_http_wasm_abi_shm_delete(ngx_http_wasm_abi_ctx_t *ctx,

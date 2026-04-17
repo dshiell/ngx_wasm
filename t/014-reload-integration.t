@@ -86,6 +86,75 @@ EOF
     $nginx->cleanup();
 };
 
+subtest 'shared memory richer primitives survive reload' => sub {
+    my $port = random_port();
+    my $nginx = TestWasmIntegration->new(root => TestWasm::wasm_root());
+    my $failed = 0;
+
+    eval {
+        $nginx->write_conf(<<"EOF");
+worker_processes 1;
+error_log logs/error.log info;
+pid logs/nginx.pid;
+
+events {
+    worker_connections 64;
+}
+
+http {
+    access_log off;
+    wasm_shm_zone shared 1m;
+
+    server {
+        listen $port;
+        server_name localhost;
+
+        location /seed {
+            content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_seed_counter;
+        }
+
+        location /incr {
+            content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_incr_counter;
+        }
+    }
+}
+EOF
+
+        my ($ok, undef, $stderr) = $nginx->nginx_test();
+        ok($ok, 'config test succeeds') or do { diag $stderr; $failed = 1; };
+        $nginx->start();
+        ok($nginx->wait_for_pid_file(timeout => 3), 'pid file created') or $failed = 1;
+
+        ($ok, my $body) = $nginx->wait_for_body(
+            url => "http://127.0.0.1:$port/seed",
+            expected => '0',
+        );
+        ok($ok, 'can seed counter before reload') or do { diag $body; $failed = 1; };
+
+        ($ok, $body) = $nginx->wait_for_body(
+            url => "http://127.0.0.1:$port/incr",
+            expected => '2',
+        );
+        ok($ok, 'can increment counter before reload') or do { diag $body; $failed = 1; };
+
+        ($ok, undef, $stderr) = $nginx->reload();
+        ok($ok, 'reload succeeds') or do { diag $stderr; $failed = 1; };
+
+        ($ok, $body) = $nginx->wait_for_body(
+            url => "http://127.0.0.1:$port/incr",
+            expected => '4',
+        );
+        ok($ok, 'counter value persists across reload for incr') or do { diag $body; $failed = 1; };
+    };
+
+    if ($@) {
+        diag $@;
+        $failed = 1;
+    }
+    diag_error_log($nginx) if $failed;
+    $nginx->cleanup();
+};
+
 subtest 'metrics survive reload' => sub {
     my $port = random_port();
     my $nginx = TestWasmIntegration->new(root => TestWasm::wasm_root());

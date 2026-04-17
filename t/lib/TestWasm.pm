@@ -34,6 +34,7 @@ our @EXPORT_OK = qw(
     shm_get_wasm
     shm_delete_wasm
     shm_error_check_wasm
+    shm_rich_wasm
     metric_counter_inc_wasm
     metric_gauge_ops_wasm
     metric_unknown_wasm
@@ -180,6 +181,10 @@ sub shm_delete_wasm {
 
 sub shm_error_check_wasm {
     return wasm_root() . "/wasm/http-guests/build/shm_error_check.wasm";
+}
+
+sub shm_rich_wasm {
+    return wasm_root() . "/wasm/http-guests/src/shm_rich.wat";
 }
 
 sub metric_counter_inc_wasm {
