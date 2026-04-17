@@ -48,7 +48,7 @@ fi
 cat > "${CONF_PATH}" <<EOF
 worker_processes  1;
 
-error_log  logs/error.log info;
+error_log  logs/error.log crit;
 pid        logs/nginx.pid;
 
 events {
