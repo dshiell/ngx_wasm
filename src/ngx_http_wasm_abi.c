@@ -9,6 +9,8 @@ static ngx_table_elt_t *ngx_http_wasm_abi_find_header(ngx_http_request_t *r,
                                                       size_t name_len);
 static ngx_table_elt_t *ngx_http_wasm_abi_find_resp_header(
     ngx_http_request_t *r, const u_char *name, size_t name_len);
+static ngx_http_variable_t *ngx_http_wasm_abi_find_variable(
+    ngx_http_request_t *r, const u_char *name, size_t name_len);
 static ngx_int_t ngx_http_wasm_abi_copy_bytes(ngx_http_request_t *r,
                                               ngx_str_t *dst,
                                               const u_char *data,
@@ -638,6 +640,49 @@ static ngx_table_elt_t *ngx_http_wasm_abi_find_resp_header(
     return NULL;
 }
 
+static ngx_http_variable_t *ngx_http_wasm_abi_find_variable(
+    ngx_http_request_t *r, const u_char *name, size_t name_len) {
+    ngx_http_core_main_conf_t *cmcf;
+    ngx_http_variable_t *v, *prefix;
+    ngx_uint_t i;
+    ngx_str_t var_name;
+    ngx_uint_t hash;
+    u_char *lowcase;
+
+    cmcf = ngx_http_get_module_main_conf(r, ngx_http_core_module);
+    if (cmcf == NULL) {
+        return NULL;
+    }
+
+    lowcase = ngx_pnalloc(r->pool, name_len);
+    if (lowcase == NULL) {
+        return NULL;
+    }
+
+    hash = ngx_hash_strlow(lowcase, (u_char *)name, name_len);
+    var_name.data = lowcase;
+    var_name.len = name_len;
+
+    v = ngx_hash_find(&cmcf->variables_hash, hash, var_name.data, var_name.len);
+    if (v != NULL) {
+        return v;
+    }
+
+    prefix = cmcf->prefix_variables.elts;
+    if (prefix == NULL) {
+        return NULL;
+    }
+
+    for (i = 0; i < cmcf->prefix_variables.nelts; i++) {
+        if (prefix[i].name.len == name_len &&
+            ngx_strncmp(prefix[i].name.data, var_name.data, name_len) == 0) {
+            return &prefix[i];
+        }
+    }
+
+    return NULL;
+}
+
 ngx_int_t ngx_http_wasm_abi_resp_set_status(ngx_http_wasm_abi_ctx_t *ctx,
                                             ngx_int_t status) {
     if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_SET) !=
@@ -979,6 +1024,109 @@ ngx_int_t ngx_http_wasm_abi_req_get_body(ngx_http_wasm_abi_ctx_t *ctx,
     }
 
     return (ngx_int_t)ctx->request_body.len;
+}
+
+ngx_int_t ngx_http_wasm_abi_var_get(ngx_http_wasm_abi_ctx_t *ctx,
+                                    const u_char *name,
+                                    size_t name_len,
+                                    u_char *buf,
+                                    size_t buf_len) {
+    ngx_http_request_t *r;
+    ngx_http_variable_value_t *vv;
+    ngx_str_t var_name;
+    size_t copy_len;
+    ngx_uint_t hash;
+    u_char *lowcase;
+
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_VAR_GET) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ctx->request == NULL || name_len == 0) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    r = ctx->request;
+    lowcase = ngx_pnalloc(r->pool, name_len);
+    if (lowcase == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    hash = ngx_hash_strlow(lowcase, (u_char *)name, name_len);
+    var_name.data = lowcase;
+    var_name.len = name_len;
+
+    vv = ngx_http_get_variable(r, &var_name, hash);
+    if (vv == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (vv->not_found) {
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    copy_len = ngx_min(vv->len, buf_len);
+    if (copy_len != 0) {
+        ngx_memcpy(buf, vv->data, copy_len);
+    }
+
+    return (ngx_int_t)vv->len;
+}
+
+ngx_int_t ngx_http_wasm_abi_var_set(ngx_http_wasm_abi_ctx_t *ctx,
+                                    const u_char *name,
+                                    size_t name_len,
+                                    const u_char *value,
+                                    size_t value_len) {
+    ngx_http_request_t *r;
+    ngx_http_variable_t *var;
+    ngx_http_variable_value_t vv;
+    ngx_str_t copied;
+
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_VAR_SET) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ctx->request == NULL || name_len == 0) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    r = ctx->request;
+    var = ngx_http_wasm_abi_find_variable(r, name, name_len);
+    if (var == NULL) {
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    if ((var->flags & NGX_HTTP_VAR_CHANGEABLE) == 0) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ngx_http_wasm_abi_copy_bytes(r, &copied, value, value_len) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ngx_memzero(&vv, sizeof(vv));
+    vv.len = copied.len;
+    vv.valid = 1;
+    vv.no_cacheable = 0;
+    vv.not_found = 0;
+    vv.data = copied.data;
+
+    if (var->set_handler != NULL) {
+        var->set_handler(r, &vv, var->data);
+        return NGX_HTTP_WASM_OK;
+    }
+
+    if ((var->flags & NGX_HTTP_VAR_INDEXED) == 0) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    r->variables[var->index] = vv;
+
+    return NGX_HTTP_WASM_OK;
 }
 
 ngx_int_t
