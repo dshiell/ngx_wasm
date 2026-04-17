@@ -149,16 +149,10 @@ smoke:
 test: build
 	NGINX_DIR="$(NGINX_DIR)" \
 	./scripts/run-tests.sh
-	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-ssl-hooks.sh
-	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-shm.sh
-	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-metrics-workers.sh
-	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-metrics.sh
-	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
 
 test-reload: build
-	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-shm.sh
-	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-metrics.sh
-	NGINX_DIR="$(NGINX_DIR)" NGINX_BIN="$(NGINX_BIN)" ./scripts/test-reload-content-by-wasm.sh
+	NGINX_DIR="$(NGINX_DIR)" \
+	./scripts/run-tests.sh
 
 clean:
 	$(MAKE) -C $(HTTP_GUESTS_DIR) clean

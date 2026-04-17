@@ -736,6 +736,23 @@ ngx_int_t ngx_http_wasm_abi_metric_gauge_add(ngx_http_wasm_abi_ctx_t *ctx,
         ctx->metrics_zone, name, name_len, delta);
 }
 
+ngx_int_t ngx_http_wasm_abi_balancer_set_peer(ngx_http_wasm_abi_ctx_t *ctx,
+                                              ngx_uint_t peer_index) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_BALANCER) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (ctx->request == NULL || ctx->request->upstream == NULL) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ctx->balancer_peer_set = 1;
+    ctx->balancer_peer_index = peer_index;
+
+    return NGX_HTTP_WASM_OK;
+}
+
 #if (NGX_HTTP_SSL)
 ngx_int_t ngx_http_wasm_abi_ssl_get_server_name(ngx_http_wasm_abi_ctx_t *ctx,
                                                 u_char *buf,

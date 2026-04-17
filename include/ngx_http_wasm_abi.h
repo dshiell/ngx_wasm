@@ -43,6 +43,7 @@
 #define NGX_HTTP_WASM_ABI_CAP_SHARED_KV 0x2000
 #define NGX_HTTP_WASM_ABI_CAP_METRICS 0x4000
 #define NGX_HTTP_WASM_ABI_CAP_SUBREQUEST 0x8000
+#define NGX_HTTP_WASM_ABI_CAP_BALANCER 0x10000
 
 #define NGX_HTTP_WASM_SUBREQ_CAPTURE_BODY 0x0001
 
@@ -64,6 +65,8 @@ typedef struct {
     ngx_uint_t resp_body_chunk_output_set;
     ngx_uint_t resp_body_chunk_eof;
     ngx_uint_t ssl_handshake_rejected;
+    ngx_uint_t balancer_peer_set;
+    ngx_uint_t balancer_peer_index;
     ngx_uint_t abi_version;
     ngx_uint_t capabilities;
     ngx_int_t status;
@@ -163,6 +166,8 @@ ngx_int_t ngx_http_wasm_abi_metric_gauge_add(ngx_http_wasm_abi_ctx_t *ctx,
                                              const u_char *name,
                                              size_t name_len,
                                              ngx_int_t delta);
+ngx_int_t ngx_http_wasm_abi_balancer_set_peer(ngx_http_wasm_abi_ctx_t *ctx,
+                                              ngx_uint_t peer_index);
 ngx_int_t ngx_http_wasm_abi_resp_get_body_chunk(ngx_http_wasm_abi_ctx_t *ctx,
                                                 u_char *buf,
                                                 size_t buf_len);

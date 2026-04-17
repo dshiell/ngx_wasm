@@ -128,8 +128,8 @@ The minimum staged coverage is:
 Recommended harness split:
 
 - `Test::Nginx::Socket` for deterministic request-level behavior
-- dedicated process/integration scripts for reload, timeout, and future
-  streaming cases
+- repo-local Perl integration helpers under `t/lib/` for reload, multi-worker,
+  SSL, and other cases that need direct nginx process control
 
 Recommended first fixtures for resumable execution:
 

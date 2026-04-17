@@ -64,6 +64,7 @@ int ngx_wasm_shm_delete(const void *key_ptr, int key_len);
 int ngx_wasm_metric_counter_inc(const void *name_ptr, int name_len, int delta);
 int ngx_wasm_metric_gauge_set(const void *name_ptr, int name_len, int value);
 int ngx_wasm_metric_gauge_add(const void *name_ptr, int name_len, int delta);
+int ngx_wasm_balancer_set_peer(int peer_index);
 int ngx_wasm_req_set_header(const void *name_ptr, int name_len,
                             const void *value_ptr, int value_len);
 int ngx_wasm_req_get_header(const void *name_ptr, int name_len,
@@ -139,6 +140,14 @@ Expected semantics:
   - returns `0` on success
   - returns `-2` for unknown metrics, invalid arguments, missing zone, or type
     mismatch
+
+- `ngx_wasm_balancer_set_peer`
+  - selects a configured upstream peer by zero-based index during
+    `balancer_by_wasm`
+  - currently valid only in balancer phase
+  - returns `0` on success
+  - returns `-2` on invalid arguments, a forbidden phase, or missing upstream
+    state
 
 - `ngx_wasm_req_set_header`
   - sets or replaces a request header visible to later nginx processing
@@ -254,6 +263,7 @@ Current conventions:
   which returns the stored length on success
 - metric operations return `0` on success
 - `ngx_wasm_req_get_header` returns a non-negative length on success
+- `ngx_wasm_balancer_set_peer` returns `0` on success
 - `ngx_wasm_subreq_get_header` returns a non-negative length on success
 - `ngx_wasm_subreq_get_body` returns a non-negative length on success
 - `ngx_wasm_subreq_get_status` returns a non-negative HTTP status on success
@@ -278,6 +288,18 @@ Current conventions:
 - if body capture is not requested, only status and headers are available
 - `log_by_wasm`, filter hooks, SSL hooks, lifecycle hooks, and timer hooks do
   not allow subrequest launch
+
+## Current Balancer Limitations
+
+- `balancer_by_wasm` is upstream-scope only
+- balancer execution is synchronous only
+- `ngx_wasm_yield()` is not allowed in balancer phase
+- guests may currently choose only among already-configured upstream peers by
+  zero-based index
+- request header reads, logging, shared memory, and metrics are available in
+  balancer phase
+- response mutation, request mutation, and subrequests are not available in
+  balancer phase
 
 ## Current Shared Memory KV Limitations
 

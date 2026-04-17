@@ -40,6 +40,7 @@ typedef enum {
     NGX_HTTP_WASM_PHASE_CONTENT = 0,
     NGX_HTTP_WASM_PHASE_REWRITE,
     NGX_HTTP_WASM_PHASE_SERVER_REWRITE,
+    NGX_HTTP_WASM_PHASE_BALANCER,
     NGX_HTTP_WASM_PHASE_HEADER_FILTER,
     NGX_HTTP_WASM_PHASE_BODY_FILTER,
     NGX_HTTP_WASM_PHASE_LOG,
@@ -71,11 +72,14 @@ typedef struct {
     ngx_http_wasm_phase_conf_t content;
     ngx_http_wasm_phase_conf_t rewrite;
     ngx_http_wasm_phase_conf_t server_rewrite;
+    ngx_http_wasm_phase_conf_t balancer;
     ngx_http_wasm_phase_conf_t header_filter;
     ngx_http_wasm_phase_conf_t body_filter;
     ngx_http_wasm_phase_conf_t log;
     ngx_http_wasm_phase_conf_t ssl_client_hello;
     ngx_http_wasm_phase_conf_t ssl_certificate;
+    ngx_http_upstream_init_pt original_init_upstream;
+    ngx_http_upstream_init_peer_pt original_init_peer;
     ngx_flag_t metrics_endpoint;
 } ngx_http_wasm_conf_t;
 

@@ -30,6 +30,7 @@ our @EXPORT_OK = qw(
     metric_gauge_ops_wasm
     metric_unknown_wasm
     metric_log_inc_wasm
+    hello_world_reload_wasm
     resp_header_set_wasm
     resp_header_echo_wasm
     resp_location_set_wasm
@@ -40,6 +41,12 @@ our @EXPORT_OK = qw(
     resp_body_append_eof_wasm
     resp_body_window_ab_to_x_wasm
     access_auth_gate_wasm
+    balancer_select_header_wasm
+    balancer_noop_wasm
+    balancer_invalid_peer_wasm
+    balancer_yield_wasm
+    ssl_select_cert_wasm
+    ssl_reject_blocked_wasm
     subreq_body_echo_wasm
     subreq_header_echo_wasm
     subreq_method_post_wasm
@@ -151,6 +158,10 @@ sub metric_log_inc_wasm {
     return wasm_root() . "/wasm/http-guests/src/metric_log_inc.wat";
 }
 
+sub hello_world_reload_wasm {
+    return wasm_root() . "/wasm/http-guests/src/hello_world_reload.wat";
+}
+
 sub resp_header_set_wasm {
     return wasm_root() . "/wasm/http-guests/src/resp_header_set.wat";
 }
@@ -189,6 +200,30 @@ sub resp_body_window_ab_to_x_wasm {
 
 sub access_auth_gate_wasm {
     return wasm_root() . "/wasm/http-guests/build/access_auth_gate.wasm";
+}
+
+sub balancer_select_header_wasm {
+    return wasm_root() . "/wasm/http-guests/src/balancer_select_header.wat";
+}
+
+sub balancer_noop_wasm {
+    return wasm_root() . "/wasm/http-guests/src/balancer_noop.wat";
+}
+
+sub balancer_invalid_peer_wasm {
+    return wasm_root() . "/wasm/http-guests/src/balancer_invalid_peer.wat";
+}
+
+sub balancer_yield_wasm {
+    return wasm_root() . "/wasm/http-guests/src/balancer_yield.wat";
+}
+
+sub ssl_select_cert_wasm {
+    return wasm_root() . "/wasm/http-guests/build/ssl_select_cert.wasm";
+}
+
+sub ssl_reject_blocked_wasm {
+    return wasm_root() . "/wasm/http-guests/build/ssl_reject_blocked.wasm";
 }
 
 sub subreq_body_echo_wasm {
