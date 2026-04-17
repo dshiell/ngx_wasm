@@ -20,6 +20,11 @@ our @EXPORT_OK = qw(
     req_header_set_only_wasm
     req_header_echo_wasm
     req_body_echo_wasm
+    var_get_request_uri_wasm
+    var_set_only_wasm
+    var_get_missing_wasm
+    var_set_readonly_wasm
+    var_set_forbidden_wasm
     shm_roundtrip_wasm
     shm_set_wasm
     shm_set_only_wasm
@@ -116,6 +121,26 @@ sub req_header_echo_wasm {
 
 sub req_body_echo_wasm {
     return wasm_root() . "/wasm/http-guests/src/req_body_echo.wat";
+}
+
+sub var_get_request_uri_wasm {
+    return wasm_root() . "/wasm/http-guests/src/var_get_request_uri.wat";
+}
+
+sub var_set_only_wasm {
+    return wasm_root() . "/wasm/http-guests/src/var_set_only.wat";
+}
+
+sub var_get_missing_wasm {
+    return wasm_root() . "/wasm/http-guests/src/var_get_missing.wat";
+}
+
+sub var_set_readonly_wasm {
+    return wasm_root() . "/wasm/http-guests/src/var_set_readonly.wat";
+}
+
+sub var_set_forbidden_wasm {
+    return wasm_root() . "/wasm/http-guests/src/var_set_forbidden.wat";
 }
 
 sub shm_roundtrip_wasm {

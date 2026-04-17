@@ -59,6 +59,14 @@ int ngx_wasm_req_get_header(const void *name_ptr,
                             int name_len,
                             void *buf_ptr,
                             int buf_len);
+int ngx_wasm_var_get(const void *name_ptr,
+                     int name_len,
+                     void *buf_ptr,
+                     int buf_len);
+int ngx_wasm_var_set(const void *name_ptr,
+                     int name_len,
+                     const void *value_ptr,
+                     int value_len);
 int ngx_wasm_req_get_body(void *buf_ptr, int buf_len);
 int ngx_wasm_subreq_set_header(const void *name_ptr,
                                int name_len,

@@ -69,6 +69,10 @@ int ngx_wasm_req_set_header(const void *name_ptr, int name_len,
                             const void *value_ptr, int value_len);
 int ngx_wasm_req_get_header(const void *name_ptr, int name_len,
                             void *buf_ptr, int buf_len);
+int ngx_wasm_var_get(const void *name_ptr, int name_len,
+                     void *buf_ptr, int buf_len);
+int ngx_wasm_var_set(const void *name_ptr, int name_len,
+                     const void *value_ptr, int value_len);
 int ngx_wasm_subreq_set_header(const void *name_ptr, int name_len,
                                const void *value_ptr, int value_len);
 int ngx_wasm_subreq(const void *uri_ptr, int uri_len,
@@ -165,6 +169,22 @@ Expected semantics:
   - returns `-1` when the header is missing
   - returns `-2` on invalid arguments or host-side failure
 
+- `ngx_wasm_var_get`
+  - reads an nginx variable by case-insensitive name
+  - copies up to `buf_len` bytes into `buf_ptr`
+  - returns the full variable value length on success, even if truncated by
+    the provided buffer
+  - returns `-1` when the variable is unknown or currently not found
+  - returns `-2` on invalid arguments, a forbidden phase, or host-side failure
+
+- `ngx_wasm_var_set`
+  - writes a changeable nginx variable by case-insensitive name
+  - values are copied into request-pool memory before assignment
+  - returns `0` on success
+  - returns `-1` when the variable is unknown
+  - returns `-2` when the variable is not changeable, the phase forbids
+    mutation, or the host cannot complete the write
+
 - `ngx_wasm_subreq_set_header`
   - stages a request header for the next subrequest launch
   - staged headers are consumed by the next successful `ngx_wasm_subreq` call
@@ -245,12 +265,22 @@ Current copy policy:
 
 - log reads may borrow guest memory for the duration of the immediate call
 - response body writes are copied into the NGINX request pool
+- variable writes are copied into request-pool memory before assignment
 - SSL hook state is connection-local and lasts only for the current handshake
 - shared-memory KV state is host-owned and shared across workers through an
   nginx shared memory zone
 - metrics state is host-owned and shared across workers through an nginx
   shared memory zone
 - subrequest result state is host-owned and request-local
+
+Current variable phase policy:
+
+- variable reads are available in rewrite, access, content, header filter,
+  body filter, log, and balancer hooks
+- variable writes are available in rewrite, access, content, and balancer
+  hooks
+- variable writes are forbidden in header filter, body filter, log, SSL, and
+  lifecycle/timer hooks
 
 ## Return Conventions
 
