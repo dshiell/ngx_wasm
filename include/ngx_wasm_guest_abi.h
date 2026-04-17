@@ -36,10 +36,25 @@ int ngx_wasm_shm_get(const void *key_ptr,
                      int key_len,
                      void *buf_ptr,
                      int buf_len);
+int ngx_wasm_shm_exists(const void *key_ptr, int key_len);
+int ngx_wasm_shm_incr(const void *key_ptr, int key_len, int delta);
 int ngx_wasm_shm_set(const void *key_ptr,
                      int key_len,
                      const void *value_ptr,
                      int value_len);
+int ngx_wasm_shm_set_ex(const void *key_ptr,
+                        int key_len,
+                        const void *value_ptr,
+                        int value_len,
+                        int ttl_msec);
+int ngx_wasm_shm_add(const void *key_ptr,
+                     int key_len,
+                     const void *value_ptr,
+                     int value_len);
+int ngx_wasm_shm_replace(const void *key_ptr,
+                         int key_len,
+                         const void *value_ptr,
+                         int value_len);
 int ngx_wasm_shm_delete(const void *key_ptr, int key_len);
 int ngx_wasm_metric_counter_inc(const void *name_ptr, int name_len, int delta);
 int ngx_wasm_metric_gauge_set(const void *name_ptr, int name_len, int value);
