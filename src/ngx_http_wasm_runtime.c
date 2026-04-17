@@ -231,6 +231,19 @@ static wasm_trap_t *ngx_http_wasm_host_var_set(void *env,
                                                size_t nargs,
                                                wasmtime_val_t *results,
                                                size_t nresults);
+static wasm_trap_t *ngx_http_wasm_host_time_unix_ms(void *env,
+                                                    wasmtime_caller_t *caller,
+                                                    const wasmtime_val_t *args,
+                                                    size_t nargs,
+                                                    wasmtime_val_t *results,
+                                                    size_t nresults);
+static wasm_trap_t *
+ngx_http_wasm_host_time_monotonic_ms(void *env,
+                                     wasmtime_caller_t *caller,
+                                     const wasmtime_val_t *args,
+                                     size_t nargs,
+                                     wasmtime_val_t *results,
+                                     size_t nresults);
 static wasm_trap_t *
 ngx_http_wasm_host_subreq_set_header(void *env,
                                      wasmtime_caller_t *caller,
@@ -461,7 +474,7 @@ void ngx_http_wasm_runtime_init_exec_ctx(
         NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
             NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RW |
             NGX_HTTP_WASM_ABI_CAP_VAR_GET | NGX_HTTP_WASM_ABI_CAP_VAR_SET |
-            NGX_HTTP_WASM_ABI_CAP_REQ_BODY_GET |
+            NGX_HTTP_WASM_ABI_CAP_TIME | NGX_HTTP_WASM_ABI_CAP_REQ_BODY_GET |
             NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_SET |
             NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_GET |
             NGX_HTTP_WASM_ABI_CAP_RESP_HEADERS_RW |
@@ -470,39 +483,41 @@ void ngx_http_wasm_runtime_init_exec_ctx(
             NGX_HTTP_WASM_ABI_CAP_METRICS | NGX_HTTP_WASM_ABI_CAP_SUBREQUEST);
 
     if (phase_kind == NGX_HTTP_WASM_PHASE_HEADER_FILTER) {
-        ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
-                                NGX_HTTP_WASM_ABI_CAP_VAR_GET |
-                                NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_SET |
-                                NGX_HTTP_WASM_ABI_CAP_RESP_HEADERS_RW |
-                                NGX_HTTP_WASM_ABI_CAP_SHARED_KV |
-                                NGX_HTTP_WASM_ABI_CAP_METRICS;
+        ctx->abi.capabilities =
+            NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
+            NGX_HTTP_WASM_ABI_CAP_VAR_GET | NGX_HTTP_WASM_ABI_CAP_TIME |
+            NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_SET |
+            NGX_HTTP_WASM_ABI_CAP_RESP_HEADERS_RW |
+            NGX_HTTP_WASM_ABI_CAP_SHARED_KV | NGX_HTTP_WASM_ABI_CAP_METRICS;
     } else if (phase_kind == NGX_HTTP_WASM_PHASE_BALANCER) {
         ctx->abi.capabilities =
             NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
             NGX_HTTP_WASM_ABI_CAP_VAR_GET | NGX_HTTP_WASM_ABI_CAP_VAR_SET |
-            NGX_HTTP_WASM_ABI_CAP_SHARED_KV | NGX_HTTP_WASM_ABI_CAP_METRICS |
-            NGX_HTTP_WASM_ABI_CAP_BALANCER;
+            NGX_HTTP_WASM_ABI_CAP_TIME | NGX_HTTP_WASM_ABI_CAP_SHARED_KV |
+            NGX_HTTP_WASM_ABI_CAP_METRICS | NGX_HTTP_WASM_ABI_CAP_BALANCER;
     } else if (phase_kind == NGX_HTTP_WASM_PHASE_BODY_FILTER) {
-        ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
-                                NGX_HTTP_WASM_ABI_CAP_VAR_GET |
-                                NGX_HTTP_WASM_ABI_CAP_RESP_HEADERS_RW |
-                                NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_READ |
-                                NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_WRITE |
-                                NGX_HTTP_WASM_ABI_CAP_SHARED_KV |
-                                NGX_HTTP_WASM_ABI_CAP_METRICS;
+        ctx->abi.capabilities =
+            NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
+            NGX_HTTP_WASM_ABI_CAP_VAR_GET | NGX_HTTP_WASM_ABI_CAP_TIME |
+            NGX_HTTP_WASM_ABI_CAP_RESP_HEADERS_RW |
+            NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_READ |
+            NGX_HTTP_WASM_ABI_CAP_RESP_BODY_CHUNK_WRITE |
+            NGX_HTTP_WASM_ABI_CAP_SHARED_KV | NGX_HTTP_WASM_ABI_CAP_METRICS;
     } else if (phase_kind == NGX_HTTP_WASM_PHASE_LOG) {
-        ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
-                                NGX_HTTP_WASM_ABI_CAP_VAR_GET |
-                                NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_GET |
-                                NGX_HTTP_WASM_ABI_CAP_SHARED_KV |
-                                NGX_HTTP_WASM_ABI_CAP_METRICS;
+        ctx->abi.capabilities =
+            NGX_HTTP_WASM_ABI_CAP_REQ_HEADERS_RO |
+            NGX_HTTP_WASM_ABI_CAP_VAR_GET | NGX_HTTP_WASM_ABI_CAP_TIME |
+            NGX_HTTP_WASM_ABI_CAP_RESP_STATUS_GET |
+            NGX_HTTP_WASM_ABI_CAP_SHARED_KV | NGX_HTTP_WASM_ABI_CAP_METRICS;
     } else if (phase_kind == NGX_HTTP_WASM_PHASE_SSL_CLIENT_HELLO) {
         ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET |
-                                NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT;
+                                NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT |
+                                NGX_HTTP_WASM_ABI_CAP_TIME;
     } else if (phase_kind == NGX_HTTP_WASM_PHASE_SSL_CERTIFICATE) {
         ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET |
                                 NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT |
-                                NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET;
+                                NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET |
+                                NGX_HTTP_WASM_ABI_CAP_TIME;
     }
 }
 
@@ -536,15 +551,18 @@ void ngx_http_wasm_runtime_init_ssl_exec_ctx(
                            c,
                            NULL,
                            NULL,
-                           NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET);
+                           NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET |
+                               NGX_HTTP_WASM_ABI_CAP_TIME);
 
     if (phase_kind == NGX_HTTP_WASM_PHASE_SSL_CLIENT_HELLO) {
         ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET |
-                                NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT;
+                                NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT |
+                                NGX_HTTP_WASM_ABI_CAP_TIME;
     } else if (phase_kind == NGX_HTTP_WASM_PHASE_SSL_CERTIFICATE) {
         ctx->abi.capabilities = NGX_HTTP_WASM_ABI_CAP_SSL_SERVER_NAME_GET |
                                 NGX_HTTP_WASM_ABI_CAP_SSL_HANDSHAKE_REJECT |
-                                NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET;
+                                NGX_HTTP_WASM_ABI_CAP_SSL_CERTIFICATE_SET |
+                                NGX_HTTP_WASM_ABI_CAP_TIME;
     }
 }
 #endif
@@ -981,6 +999,26 @@ ngx_http_wasm_runtime_define_host_funcs(ngx_http_wasm_runtime_state_t *rt) {
                                           ngx_http_wasm_runtime_functype_4_1(),
                                           ngx_http_wasm_host_var_set) !=
         NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_time_unix_ms",
+            wasm_functype_new_2_1(wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32)),
+            ngx_http_wasm_host_time_unix_ms) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_wasm_runtime_define_func(
+            rt,
+            "ngx_wasm_time_monotonic_ms",
+            wasm_functype_new_2_1(wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32),
+                                  wasm_valtype_new(WASM_I32)),
+            ngx_http_wasm_host_time_monotonic_ms) != NGX_OK) {
         return NGX_ERROR;
     }
 
@@ -2293,6 +2331,93 @@ static wasm_trap_t *ngx_http_wasm_host_var_set(void *env,
     results[0].kind = WASMTIME_I32;
     results[0].of.i32 = ngx_http_wasm_abi_var_set(
         &ctx->abi, name, (size_t)args[1].of.i32, value, (size_t)args[3].of.i32);
+
+    return NULL;
+}
+
+static wasm_trap_t *ngx_http_wasm_host_time_unix_ms(void *env,
+                                                    wasmtime_caller_t *caller,
+                                                    const wasmtime_val_t *args,
+                                                    size_t nargs,
+                                                    wasmtime_val_t *results,
+                                                    size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+    u_char *buf;
+    wasm_trap_t *trap;
+
+    (void)env;
+
+    if (nargs != 2 || nresults != 1 || args[0].kind != WASMTIME_I32 ||
+        args[1].kind != WASMTIME_I32) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_time_unix_ms signature");
+    }
+
+    if (args[0].of.i32 < 0 || args[1].of.i32 < 0) {
+        results[0].kind = WASMTIME_I32;
+        results[0].of.i32 = NGX_HTTP_WASM_ERROR;
+        return NULL;
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory_mut(
+        caller, (uint32_t)args[0].of.i32, (uint32_t)args[1].of.i32, &buf);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    if ((ctx->abi.capabilities & NGX_HTTP_WASM_ABI_CAP_TIME) == 0) {
+        return ngx_http_wasm_runtime_phase_forbidden(
+            "ngx_wasm_time_unix_ms not allowed in this phase");
+    }
+
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 =
+        ngx_http_wasm_abi_time_unix_ms(&ctx->abi, buf, (size_t)args[1].of.i32);
+
+    return NULL;
+}
+
+static wasm_trap_t *
+ngx_http_wasm_host_time_monotonic_ms(void *env,
+                                     wasmtime_caller_t *caller,
+                                     const wasmtime_val_t *args,
+                                     size_t nargs,
+                                     wasmtime_val_t *results,
+                                     size_t nresults) {
+    ngx_http_wasm_exec_ctx_t *ctx;
+    u_char *buf;
+    wasm_trap_t *trap;
+
+    (void)env;
+
+    if (nargs != 2 || nresults != 1 || args[0].kind != WASMTIME_I32 ||
+        args[1].kind != WASMTIME_I32) {
+        return ngx_http_wasm_runtime_bad_signature(
+            "bad ngx_wasm_time_monotonic_ms signature");
+    }
+
+    if (args[0].of.i32 < 0 || args[1].of.i32 < 0) {
+        results[0].kind = WASMTIME_I32;
+        results[0].of.i32 = NGX_HTTP_WASM_ERROR;
+        return NULL;
+    }
+
+    trap = ngx_http_wasm_runtime_get_memory_mut(
+        caller, (uint32_t)args[0].of.i32, (uint32_t)args[1].of.i32, &buf);
+    if (trap != NULL) {
+        return trap;
+    }
+
+    ctx = wasmtime_context_get_data(wasmtime_caller_context(caller));
+    if ((ctx->abi.capabilities & NGX_HTTP_WASM_ABI_CAP_TIME) == 0) {
+        return ngx_http_wasm_runtime_phase_forbidden(
+            "ngx_wasm_time_monotonic_ms not allowed in this phase");
+    }
+
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 = ngx_http_wasm_abi_time_monotonic_ms(
+        &ctx->abi, buf, (size_t)args[1].of.i32);
 
     return NULL;
 }

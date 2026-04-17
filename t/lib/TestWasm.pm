@@ -25,6 +25,9 @@ our @EXPORT_OK = qw(
     var_get_missing_wasm
     var_set_readonly_wasm
     var_set_forbidden_wasm
+    time_basic_wasm
+    time_short_buf_wasm
+    time_log_wasm
     shm_roundtrip_wasm
     shm_set_wasm
     shm_set_only_wasm
@@ -141,6 +144,18 @@ sub var_set_readonly_wasm {
 
 sub var_set_forbidden_wasm {
     return wasm_root() . "/wasm/http-guests/src/var_set_forbidden.wat";
+}
+
+sub time_basic_wasm {
+    return wasm_root() . "/wasm/http-guests/src/time_basic.wat";
+}
+
+sub time_short_buf_wasm {
+    return wasm_root() . "/wasm/http-guests/src/time_short_buf.wat";
+}
+
+sub time_log_wasm {
+    return wasm_root() . "/wasm/http-guests/src/time_log.wat";
 }
 
 sub shm_roundtrip_wasm {

@@ -46,6 +46,7 @@
 #define NGX_HTTP_WASM_ABI_CAP_BALANCER 0x10000
 #define NGX_HTTP_WASM_ABI_CAP_VAR_GET 0x20000
 #define NGX_HTTP_WASM_ABI_CAP_VAR_SET 0x40000
+#define NGX_HTTP_WASM_ABI_CAP_TIME 0x80000
 
 #define NGX_HTTP_WASM_SUBREQ_CAPTURE_BODY 0x0001
 
@@ -134,6 +135,12 @@ ngx_int_t ngx_http_wasm_abi_var_set(ngx_http_wasm_abi_ctx_t *ctx,
                                     size_t name_len,
                                     const u_char *value,
                                     size_t value_len);
+ngx_int_t ngx_http_wasm_abi_time_unix_ms(ngx_http_wasm_abi_ctx_t *ctx,
+                                         u_char *buf,
+                                         size_t buf_len);
+ngx_int_t ngx_http_wasm_abi_time_monotonic_ms(ngx_http_wasm_abi_ctx_t *ctx,
+                                              u_char *buf,
+                                              size_t buf_len);
 ngx_int_t
 ngx_http_wasm_abi_resp_set_body_chunk_input(ngx_http_wasm_abi_ctx_t *ctx,
                                             const u_char *data,

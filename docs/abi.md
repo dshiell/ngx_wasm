@@ -73,6 +73,8 @@ int ngx_wasm_var_get(const void *name_ptr, int name_len,
                      void *buf_ptr, int buf_len);
 int ngx_wasm_var_set(const void *name_ptr, int name_len,
                      const void *value_ptr, int value_len);
+int ngx_wasm_time_unix_ms(void *buf_ptr, int buf_len);
+int ngx_wasm_time_monotonic_ms(void *buf_ptr, int buf_len);
 int ngx_wasm_subreq_set_header(const void *name_ptr, int name_len,
                                const void *value_ptr, int value_len);
 int ngx_wasm_subreq(const void *uri_ptr, int uri_len,
@@ -185,6 +187,22 @@ Expected semantics:
   - returns `-2` when the variable is not changeable, the phase forbids
     mutation, or the host cannot complete the write
 
+- `ngx_wasm_time_unix_ms`
+  - writes a little-endian `u64` wall-clock timestamp in milliseconds since
+    the Unix epoch into `buf_ptr`
+  - uses nginx cached time rather than forcing a fresh syscall per call
+  - requires `buf_len >= 8`
+  - returns `0` on success
+  - returns `-2` on invalid arguments, a forbidden phase, or host-side failure
+
+- `ngx_wasm_time_monotonic_ms`
+  - writes a little-endian `u64` monotonic timestamp in milliseconds into
+    `buf_ptr`
+  - uses nginx cached monotonic timer state
+  - requires `buf_len >= 8`
+  - returns `0` on success
+  - returns `-2` on invalid arguments, a forbidden phase, or host-side failure
+
 - `ngx_wasm_subreq_set_header`
   - stages a request header for the next subrequest launch
   - staged headers are consumed by the next successful `ngx_wasm_subreq` call
@@ -266,6 +284,8 @@ Current copy policy:
 - log reads may borrow guest memory for the duration of the immediate call
 - response body writes are copied into the NGINX request pool
 - variable writes are copied into request-pool memory before assignment
+- time values are written into guest-provided output buffers as little-endian
+  `u64`
 - SSL hook state is connection-local and lasts only for the current handshake
 - shared-memory KV state is host-owned and shared across workers through an
   nginx shared memory zone
@@ -281,6 +301,13 @@ Current variable phase policy:
   hooks
 - variable writes are forbidden in header filter, body filter, log, SSL, and
   lifecycle/timer hooks
+
+Current time ABI policy:
+
+- time reads are available in rewrite, access, content, header filter, body
+  filter, log, balancer, and SSL hooks
+- wall-clock and monotonic time both follow nginx cached-time update behavior,
+  so very close successive calls may return identical values
 
 ## Return Conventions
 

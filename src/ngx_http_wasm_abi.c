@@ -15,6 +15,7 @@ static ngx_int_t ngx_http_wasm_abi_copy_bytes(ngx_http_request_t *r,
                                               ngx_str_t *dst,
                                               const u_char *data,
                                               size_t len);
+static void ngx_http_wasm_abi_write_u64_le(u_char *buf, uint64_t value);
 static ngx_int_t ngx_http_wasm_abi_require(ngx_http_wasm_abi_ctx_t *ctx,
                                            ngx_uint_t capability);
 static ngx_log_t *ngx_http_wasm_abi_log_target(ngx_http_wasm_abi_ctx_t *ctx);
@@ -78,6 +79,17 @@ static ngx_int_t ngx_http_wasm_abi_set_str(ngx_http_wasm_abi_ctx_t *ctx,
     dst->len = len;
 
     return NGX_OK;
+}
+
+static void ngx_http_wasm_abi_write_u64_le(u_char *buf, uint64_t value) {
+    buf[0] = (u_char)(value & 0xff);
+    buf[1] = (u_char)((value >> 8) & 0xff);
+    buf[2] = (u_char)((value >> 16) & 0xff);
+    buf[3] = (u_char)((value >> 24) & 0xff);
+    buf[4] = (u_char)((value >> 32) & 0xff);
+    buf[5] = (u_char)((value >> 40) & 0xff);
+    buf[6] = (u_char)((value >> 48) & 0xff);
+    buf[7] = (u_char)((value >> 56) & 0xff);
 }
 
 void ngx_http_wasm_abi_init(ngx_http_wasm_abi_ctx_t *ctx,
@@ -1125,6 +1137,45 @@ ngx_int_t ngx_http_wasm_abi_var_set(ngx_http_wasm_abi_ctx_t *ctx,
     }
 
     r->variables[var->index] = vv;
+
+    return NGX_HTTP_WASM_OK;
+}
+
+ngx_int_t ngx_http_wasm_abi_time_unix_ms(ngx_http_wasm_abi_ctx_t *ctx,
+                                         u_char *buf,
+                                         size_t buf_len) {
+    ngx_time_t *tp;
+    uint64_t value;
+
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_TIME) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (buf == NULL || buf_len < sizeof(uint64_t)) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    tp = ngx_timeofday();
+    value = (uint64_t)tp->sec * 1000 + tp->msec;
+    ngx_http_wasm_abi_write_u64_le(buf, value);
+
+    return NGX_HTTP_WASM_OK;
+}
+
+ngx_int_t ngx_http_wasm_abi_time_monotonic_ms(ngx_http_wasm_abi_ctx_t *ctx,
+                                              u_char *buf,
+                                              size_t buf_len) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_TIME) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    if (buf == NULL || buf_len < sizeof(uint64_t)) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    ngx_http_wasm_abi_write_u64_le(buf, (uint64_t)ngx_current_msec);
 
     return NGX_HTTP_WASM_OK;
 }
