@@ -6,7 +6,7 @@ use TestWasm ();
 use Test::Nginx::Socket -Base;
 
 repeat_each(1);
-plan tests => repeat_each() * 32;
+plan tests => repeat_each() * 46;
 
 our $HttpConfig = '';
 
@@ -191,4 +191,65 @@ qq{
 [
     "oops",
     "error",
+]
+
+
+=== TEST 6: shared memory evicts the least recently used entry when full
+--- http_config
+wasm_shm_zone shared 128k;
+--- config eval
+qq{
+    location /seed-a {
+        content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_lru_seed_a;
+    }
+
+    location /seed-b {
+        content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_lru_seed_b;
+    }
+
+    location /seed-c {
+        content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_lru_seed_c;
+    }
+
+    location /exists-a {
+        content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_lru_exists_a;
+    }
+
+    location /exists-b {
+        content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_lru_exists_b;
+    }
+
+    location /exists-c {
+        content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_lru_exists_c;
+    }
+}
+--- request eval
+[
+    "GET /seed-a",
+    "GET /seed-b",
+    "GET /exists-a",
+    "GET /seed-c",
+    "GET /exists-a",
+    "GET /exists-b",
+    "GET /exists-c",
+]
+--- error_code eval
+[
+    200,
+    200,
+    200,
+    200,
+    200,
+    200,
+    200,
+]
+--- response_body eval
+[
+    "added",
+    "added",
+    "present",
+    "added",
+    "present",
+    "missing",
+    "present",
 ]

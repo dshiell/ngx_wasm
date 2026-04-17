@@ -766,6 +766,21 @@ ngx_int_t ngx_http_wasm_abi_shm_set(ngx_http_wasm_abi_ctx_t *ctx,
     return ngx_http_wasm_shm_set(ctx->shm_zone, key, key_len, value, value_len);
 }
 
+ngx_int_t ngx_http_wasm_abi_shm_set_ex(ngx_http_wasm_abi_ctx_t *ctx,
+                                       const u_char *key,
+                                       size_t key_len,
+                                       const u_char *value,
+                                       size_t value_len,
+                                       ngx_msec_t ttl_msec) {
+    if (ngx_http_wasm_abi_require(ctx, NGX_HTTP_WASM_ABI_CAP_SHARED_KV) !=
+        NGX_HTTP_WASM_OK) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    return ngx_http_wasm_shm_set_ex(
+        ctx->shm_zone, key, key_len, value, value_len, ttl_msec);
+}
+
 ngx_int_t ngx_http_wasm_abi_shm_add(ngx_http_wasm_abi_ctx_t *ctx,
                                     const u_char *key,
                                     size_t key_len,

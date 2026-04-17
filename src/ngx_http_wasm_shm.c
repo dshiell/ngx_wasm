@@ -5,12 +5,15 @@
 typedef struct {
     ngx_rbtree_t rbtree;
     ngx_rbtree_node_t sentinel;
+    ngx_queue_t lru_queue;
 } ngx_http_wasm_shm_ctx_t;
 
 typedef struct {
     ngx_rbtree_node_t node;
+    ngx_queue_t queue;
     size_t key_len;
     size_t value_len;
+    uint64_t expires_at_msec;
     u_char data[1];
 } ngx_http_wasm_shm_node_t;
 
@@ -30,7 +33,8 @@ ngx_http_wasm_shm_alloc_node(ngx_http_wasm_shm_zone_t *zone,
                              size_t key_len,
                              const u_char *value,
                              size_t value_len,
-                             uint32_t hash);
+                             uint32_t hash,
+                             ngx_http_wasm_shm_node_t *skip);
 static ngx_int_t ngx_http_wasm_shm_key_valid(ngx_http_wasm_shm_zone_t *zone,
                                              const u_char *key,
                                              size_t key_len);
@@ -39,9 +43,19 @@ static ngx_int_t ngx_http_wasm_shm_set_locked(ngx_http_wasm_shm_zone_t *zone,
                                               size_t key_len,
                                               const u_char *value,
                                               size_t value_len,
+                                              uint64_t expires_at_msec,
                                               uint32_t hash,
                                               ngx_uint_t require_exists,
                                               ngx_uint_t require_missing);
+static ngx_uint_t ngx_http_wasm_shm_is_expired(ngx_http_wasm_shm_node_t *entry,
+                                               uint64_t now_msec);
+static void ngx_http_wasm_shm_delete_locked(ngx_http_wasm_shm_zone_t *zone,
+                                            ngx_http_wasm_shm_node_t *entry);
+static void ngx_http_wasm_shm_touch_locked(ngx_http_wasm_shm_zone_t *zone,
+                                           ngx_http_wasm_shm_node_t *entry);
+static ngx_int_t
+ngx_http_wasm_shm_evict_lru_locked(ngx_http_wasm_shm_zone_t *zone,
+                                   ngx_http_wasm_shm_node_t *skip);
 static ngx_int_t
 ngx_http_wasm_shm_parse_i32(const u_char *data, size_t len, int32_t *value);
 static size_t ngx_http_wasm_shm_format_i32(int32_t value, u_char *buf);
@@ -120,6 +134,7 @@ static ngx_int_t ngx_http_wasm_shm_init_zone(ngx_shm_zone_t *shm_zone,
 
     ngx_rbtree_init(
         &sh->rbtree, &sh->sentinel, ngx_http_wasm_shm_rbtree_insert_value);
+    ngx_queue_init(&sh->lru_queue);
 
     shpool->data = sh;
     zone->sh = sh;
@@ -216,12 +231,26 @@ ngx_http_wasm_shm_alloc_node(ngx_http_wasm_shm_zone_t *zone,
                              size_t key_len,
                              const u_char *value,
                              size_t value_len,
-                             uint32_t hash) {
+                             uint32_t hash,
+                             ngx_http_wasm_shm_node_t *skip) {
     ngx_http_wasm_shm_node_t *entry;
     size_t size;
+    ngx_uint_t attempts;
 
+    entry = NULL;
     size = offsetof(ngx_http_wasm_shm_node_t, data) + key_len + value_len;
-    entry = ngx_slab_alloc_locked(zone->shpool, size);
+
+    for (attempts = 0; attempts < 32; attempts++) {
+        entry = ngx_slab_alloc_locked(zone->shpool, size);
+        if (entry != NULL) {
+            break;
+        }
+
+        if (ngx_http_wasm_shm_evict_lru_locked(zone, skip) != NGX_OK) {
+            return NULL;
+        }
+    }
+
     if (entry == NULL) {
         return NULL;
     }
@@ -229,6 +258,7 @@ ngx_http_wasm_shm_alloc_node(ngx_http_wasm_shm_zone_t *zone,
     entry->node.key = hash;
     entry->key_len = key_len;
     entry->value_len = value_len;
+    entry->expires_at_msec = 0;
 
     ngx_memcpy(entry->data, key, key_len);
     ngx_memcpy(entry->data + key_len, value, value_len);
@@ -253,14 +283,22 @@ static ngx_int_t ngx_http_wasm_shm_set_locked(ngx_http_wasm_shm_zone_t *zone,
                                               size_t key_len,
                                               const u_char *value,
                                               size_t value_len,
+                                              uint64_t expires_at_msec,
                                               uint32_t hash,
                                               ngx_uint_t require_exists,
                                               ngx_uint_t require_missing) {
     ngx_http_wasm_shm_ctx_t *sh;
     ngx_http_wasm_shm_node_t *entry, *existing;
+    uint64_t now_msec;
 
     sh = zone->sh;
     existing = ngx_http_wasm_shm_lookup(zone, key, key_len, hash);
+    now_msec = (uint64_t)ngx_current_msec;
+
+    if (existing != NULL && ngx_http_wasm_shm_is_expired(existing, now_msec)) {
+        ngx_http_wasm_shm_delete_locked(zone, existing);
+        existing = NULL;
+    }
 
     if (require_exists && existing == NULL) {
         return NGX_HTTP_WASM_NOT_FOUND;
@@ -272,23 +310,81 @@ static ngx_int_t ngx_http_wasm_shm_set_locked(ngx_http_wasm_shm_zone_t *zone,
 
     if (existing != NULL && existing->value_len == value_len) {
         ngx_memcpy(existing->data + existing->key_len, value, value_len);
+        existing->expires_at_msec = expires_at_msec;
+        ngx_http_wasm_shm_touch_locked(zone, existing);
         return NGX_HTTP_WASM_OK;
     }
 
     entry = ngx_http_wasm_shm_alloc_node(
-        zone, key, key_len, value, value_len, hash);
+        zone, key, key_len, value, value_len, hash, existing);
     if (entry == NULL) {
         return NGX_HTTP_WASM_ERROR;
     }
+    entry->expires_at_msec = expires_at_msec;
 
     if (existing != NULL) {
-        ngx_rbtree_delete(&sh->rbtree, &existing->node);
-        ngx_slab_free_locked(zone->shpool, existing);
+        ngx_http_wasm_shm_delete_locked(zone, existing);
     }
 
     ngx_rbtree_insert(&sh->rbtree, &entry->node);
+    ngx_queue_insert_head(&sh->lru_queue, &entry->queue);
 
     return NGX_HTTP_WASM_OK;
+}
+
+static ngx_uint_t ngx_http_wasm_shm_is_expired(ngx_http_wasm_shm_node_t *entry,
+                                               uint64_t now_msec) {
+    if (entry->expires_at_msec == 0) {
+        return 0;
+    }
+
+    return (now_msec >= entry->expires_at_msec);
+}
+
+static void ngx_http_wasm_shm_delete_locked(ngx_http_wasm_shm_zone_t *zone,
+                                            ngx_http_wasm_shm_node_t *entry) {
+    ngx_http_wasm_shm_ctx_t *sh;
+
+    sh = zone->sh;
+    ngx_queue_remove(&entry->queue);
+    ngx_rbtree_delete(&sh->rbtree, &entry->node);
+    ngx_slab_free_locked(zone->shpool, entry);
+}
+
+static void ngx_http_wasm_shm_touch_locked(ngx_http_wasm_shm_zone_t *zone,
+                                           ngx_http_wasm_shm_node_t *entry) {
+    ngx_http_wasm_shm_ctx_t *sh;
+
+    sh = zone->sh;
+    ngx_queue_remove(&entry->queue);
+    ngx_queue_insert_head(&sh->lru_queue, &entry->queue);
+}
+
+static ngx_int_t
+ngx_http_wasm_shm_evict_lru_locked(ngx_http_wasm_shm_zone_t *zone,
+                                   ngx_http_wasm_shm_node_t *skip) {
+    ngx_http_wasm_shm_ctx_t *sh;
+    ngx_queue_t *q;
+    ngx_http_wasm_shm_node_t *entry;
+
+    sh = zone->sh;
+    if (sh == NULL || ngx_queue_empty(&sh->lru_queue)) {
+        return NGX_DECLINED;
+    }
+
+    for (q = ngx_queue_last(&sh->lru_queue);
+         q != ngx_queue_sentinel(&sh->lru_queue);
+         q = ngx_queue_prev(q)) {
+        entry = ngx_queue_data(q, ngx_http_wasm_shm_node_t, queue);
+        if (entry == skip) {
+            continue;
+        }
+
+        ngx_http_wasm_shm_delete_locked(zone, entry);
+        return NGX_OK;
+    }
+
+    return NGX_DECLINED;
 }
 
 static ngx_int_t
@@ -381,8 +477,9 @@ ngx_int_t ngx_http_wasm_shm_get(ngx_http_wasm_shm_zone_t *zone,
                                 u_char *buf,
                                 size_t buf_len) {
     ngx_http_wasm_shm_node_t *entry;
-    size_t copy_len;
+    size_t copy_len, value_len;
     uint32_t hash;
+    uint64_t now_msec;
 
     if (!ngx_http_wasm_shm_key_valid(zone, key, key_len)) {
         return NGX_HTTP_WASM_ERROR;
@@ -397,14 +494,23 @@ ngx_int_t ngx_http_wasm_shm_get(ngx_http_wasm_shm_zone_t *zone,
         return NGX_HTTP_WASM_NOT_FOUND;
     }
 
-    copy_len = ngx_min(entry->value_len, buf_len);
+    now_msec = (uint64_t)ngx_current_msec;
+    if (ngx_http_wasm_shm_is_expired(entry, now_msec)) {
+        ngx_http_wasm_shm_delete_locked(zone, entry);
+        ngx_shmtx_unlock(&zone->shpool->mutex);
+        return NGX_HTTP_WASM_NOT_FOUND;
+    }
+
+    value_len = entry->value_len;
+    copy_len = ngx_min(value_len, buf_len);
     if (copy_len != 0) {
         ngx_memcpy(buf, entry->data + entry->key_len, copy_len);
     }
+    ngx_http_wasm_shm_touch_locked(zone, entry);
 
     ngx_shmtx_unlock(&zone->shpool->mutex);
 
-    return (ngx_int_t)entry->value_len;
+    return (ngx_int_t)value_len;
 }
 
 ngx_int_t ngx_http_wasm_shm_exists(ngx_http_wasm_shm_zone_t *zone,
@@ -412,6 +518,7 @@ ngx_int_t ngx_http_wasm_shm_exists(ngx_http_wasm_shm_zone_t *zone,
                                    size_t key_len) {
     ngx_http_wasm_shm_node_t *entry;
     uint32_t hash;
+    uint64_t now_msec;
 
     if (!ngx_http_wasm_shm_key_valid(zone, key, key_len)) {
         return NGX_HTTP_WASM_ERROR;
@@ -421,6 +528,15 @@ ngx_int_t ngx_http_wasm_shm_exists(ngx_http_wasm_shm_zone_t *zone,
 
     ngx_shmtx_lock(&zone->shpool->mutex);
     entry = ngx_http_wasm_shm_lookup(zone, key, key_len, hash);
+    if (entry != NULL) {
+        now_msec = (uint64_t)ngx_current_msec;
+        if (ngx_http_wasm_shm_is_expired(entry, now_msec)) {
+            ngx_http_wasm_shm_delete_locked(zone, entry);
+            entry = NULL;
+        } else {
+            ngx_http_wasm_shm_touch_locked(zone, entry);
+        }
+    }
     ngx_shmtx_unlock(&zone->shpool->mutex);
 
     return (entry != NULL) ? 1 : 0;
@@ -437,6 +553,7 @@ ngx_int_t ngx_http_wasm_shm_incr(ngx_http_wasm_shm_zone_t *zone,
     u_char value_buf[NGX_INT_T_LEN];
     size_t value_len;
     ngx_int_t rc;
+    uint64_t now_msec;
 
     if (!ngx_http_wasm_shm_key_valid(zone, key, key_len)) {
         return NGX_HTTP_WASM_ERROR;
@@ -457,6 +574,13 @@ ngx_int_t ngx_http_wasm_shm_incr(ngx_http_wasm_shm_zone_t *zone,
         return NGX_HTTP_WASM_ERROR;
     }
 
+    now_msec = (uint64_t)ngx_current_msec;
+    if (ngx_http_wasm_shm_is_expired(entry, now_msec)) {
+        ngx_http_wasm_shm_delete_locked(zone, entry);
+        ngx_shmtx_unlock(&zone->shpool->mutex);
+        return NGX_HTTP_WASM_ERROR;
+    }
+
     if (ngx_http_wasm_shm_parse_i32(entry->data + entry->key_len,
                                     entry->value_len,
                                     &current) != NGX_OK) {
@@ -473,8 +597,15 @@ ngx_int_t ngx_http_wasm_shm_incr(ngx_http_wasm_shm_zone_t *zone,
     next = (int32_t)sum;
     value_len = ngx_http_wasm_shm_format_i32(next, value_buf);
 
-    rc = ngx_http_wasm_shm_set_locked(
-        zone, key, key_len, value_buf, value_len, hash, 1, 0);
+    rc = ngx_http_wasm_shm_set_locked(zone,
+                                      key,
+                                      key_len,
+                                      value_buf,
+                                      value_len,
+                                      entry->expires_at_msec,
+                                      hash,
+                                      1,
+                                      0);
 
     ngx_shmtx_unlock(&zone->shpool->mutex);
 
@@ -503,7 +634,40 @@ ngx_int_t ngx_http_wasm_shm_set(ngx_http_wasm_shm_zone_t *zone,
 
     ngx_shmtx_lock(&zone->shpool->mutex);
     rc = ngx_http_wasm_shm_set_locked(
-        zone, key, key_len, value, value_len, hash, 0, 0);
+        zone, key, key_len, value, value_len, 0, hash, 0, 0);
+    ngx_shmtx_unlock(&zone->shpool->mutex);
+
+    return rc;
+}
+
+ngx_int_t ngx_http_wasm_shm_set_ex(ngx_http_wasm_shm_zone_t *zone,
+                                   const u_char *key,
+                                   size_t key_len,
+                                   const u_char *value,
+                                   size_t value_len,
+                                   ngx_msec_t ttl_msec) {
+    uint32_t hash;
+    ngx_int_t rc;
+    uint64_t expires_at_msec;
+
+    if (!ngx_http_wasm_shm_key_valid(zone, key, key_len) || value == NULL ||
+        value_len > NGX_HTTP_WASM_SHM_MAX_VALUE_LEN) {
+        return NGX_HTTP_WASM_ERROR;
+    }
+
+    hash = ngx_crc32_short((u_char *)key, key_len);
+    expires_at_msec = 0;
+
+    if (ttl_msec != 0) {
+        expires_at_msec = (uint64_t)ngx_current_msec + (uint64_t)ttl_msec;
+        if (expires_at_msec == 0) {
+            expires_at_msec = 1;
+        }
+    }
+
+    ngx_shmtx_lock(&zone->shpool->mutex);
+    rc = ngx_http_wasm_shm_set_locked(
+        zone, key, key_len, value, value_len, expires_at_msec, hash, 0, 0);
     ngx_shmtx_unlock(&zone->shpool->mutex);
 
     return rc;
@@ -526,7 +690,7 @@ ngx_int_t ngx_http_wasm_shm_add(ngx_http_wasm_shm_zone_t *zone,
 
     ngx_shmtx_lock(&zone->shpool->mutex);
     rc = ngx_http_wasm_shm_set_locked(
-        zone, key, key_len, value, value_len, hash, 0, 1);
+        zone, key, key_len, value, value_len, 0, hash, 0, 1);
     ngx_shmtx_unlock(&zone->shpool->mutex);
 
     return rc;
@@ -549,7 +713,7 @@ ngx_int_t ngx_http_wasm_shm_replace(ngx_http_wasm_shm_zone_t *zone,
 
     ngx_shmtx_lock(&zone->shpool->mutex);
     rc = ngx_http_wasm_shm_set_locked(
-        zone, key, key_len, value, value_len, hash, 1, 0);
+        zone, key, key_len, value, value_len, 0, hash, 1, 0);
     ngx_shmtx_unlock(&zone->shpool->mutex);
 
     return rc;
@@ -558,7 +722,6 @@ ngx_int_t ngx_http_wasm_shm_replace(ngx_http_wasm_shm_zone_t *zone,
 ngx_int_t ngx_http_wasm_shm_delete(ngx_http_wasm_shm_zone_t *zone,
                                    const u_char *key,
                                    size_t key_len) {
-    ngx_http_wasm_shm_ctx_t *sh;
     ngx_http_wasm_shm_node_t *entry;
     uint32_t hash;
 
@@ -567,13 +730,11 @@ ngx_int_t ngx_http_wasm_shm_delete(ngx_http_wasm_shm_zone_t *zone,
     }
 
     hash = ngx_crc32_short((u_char *)key, key_len);
-    sh = zone->sh;
 
     ngx_shmtx_lock(&zone->shpool->mutex);
     entry = ngx_http_wasm_shm_lookup(zone, key, key_len, hash);
     if (entry != NULL) {
-        ngx_rbtree_delete(&sh->rbtree, &entry->node);
-        ngx_slab_free_locked(zone->shpool, entry);
+        ngx_http_wasm_shm_delete_locked(zone, entry);
     }
     ngx_shmtx_unlock(&zone->shpool->mutex);
 

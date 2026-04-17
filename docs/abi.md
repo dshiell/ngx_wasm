@@ -62,6 +62,9 @@ int ngx_wasm_shm_exists(const void *key_ptr, int key_len);
 int ngx_wasm_shm_incr(const void *key_ptr, int key_len, int delta);
 int ngx_wasm_shm_set(const void *key_ptr, int key_len,
                      const void *value_ptr, int value_len);
+int ngx_wasm_shm_set_ex(const void *key_ptr, int key_len,
+                        const void *value_ptr, int value_len,
+                        int ttl_msec);
 int ngx_wasm_shm_add(const void *key_ptr, int key_len,
                      const void *value_ptr, int value_len);
 int ngx_wasm_shm_replace(const void *key_ptr, int key_len,
@@ -135,17 +138,31 @@ Expected semantics:
 - `ngx_wasm_shm_set`
   - inserts or replaces a byte-string value in the configured `wasm_shm_zone`
   - keys and values are compared and stored byte-for-byte
+  - may evict least-recently-used entries when the zone is full
+  - returns `0` on success
+  - returns `-2` on invalid arguments, missing zone, or allocation failure
+
+- `ngx_wasm_shm_set_ex`
+  - inserts or replaces a byte-string value in the configured `wasm_shm_zone`
+    with an optional TTL
+  - `ttl_msec == 0` means no expiration
+  - positive TTL values are relative to nginx cached monotonic milliseconds
+  - expiration is lazy: expired entries are removed on subsequent read/write
+    access under the shm mutex
+  - may evict least-recently-used entries when the zone is full
   - returns `0` on success
   - returns `-2` on invalid arguments, missing zone, or allocation failure
 
 - `ngx_wasm_shm_add`
   - inserts a byte-string value only when the key is absent
+  - may evict least-recently-used entries when the zone is full
   - returns `0` on success
   - returns `-1` when the key already exists
   - returns `-2` on invalid arguments, missing zone, or allocation failure
 
 - `ngx_wasm_shm_replace`
   - replaces a byte-string value only when the key is already present
+  - may evict least-recently-used entries when the zone is full
   - returns `0` on success
   - returns `-1` when the key is missing
   - returns `-2` on invalid arguments, missing zone, or allocation failure
@@ -352,6 +369,7 @@ Current conventions:
 - `ngx_wasm_shm_exists` returns `1` when present and `0` when missing
 - `ngx_wasm_shm_incr` returns the updated signed integer value on success
 - other shared-memory operations return `0` on success
+- `ngx_wasm_shm_set_ex` returns `0` on success
 - metric operations return `0` on success
 - `ngx_wasm_balancer_set_peer` returns `0` on success
 - `ngx_wasm_subreq_get_status` returns a non-negative HTTP status on success
@@ -398,7 +416,10 @@ Current conventions:
 - maximum key length is currently `256` bytes
 - maximum value length is currently `65535` bytes
 - `shm_incr` currently parses only signed 32-bit decimal ASCII values
-- no TTL, eviction, compare-and-set, or list operations yet
+- `shm_set_ex` stores per-entry expiration timestamps in cached monotonic
+  milliseconds and expires lazily on access
+- writes may evict least-recently-used entries under allocation pressure
+- no compare-and-set, explicit safe-no-evict writes, or list operations yet
 - data survives nginx reload while the zone remains configured, but not a full
   nginx restart
 

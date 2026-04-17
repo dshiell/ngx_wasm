@@ -155,6 +155,87 @@ EOF
     $nginx->cleanup();
 };
 
+subtest 'shared memory ttl expires lazily and non-expired ttl survives reload' => sub {
+    my $port = random_port();
+    my $nginx = TestWasmIntegration->new(root => TestWasm::wasm_root());
+    my $failed = 0;
+
+    eval {
+        $nginx->write_conf(<<"EOF");
+worker_processes 1;
+error_log logs/error.log info;
+pid logs/nginx.pid;
+
+events {
+    worker_connections 64;
+}
+
+http {
+    access_log off;
+    wasm_shm_zone shared 1m;
+
+    server {
+        listen $port;
+        server_name localhost;
+
+        location /set-short {
+            content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_set_ttl_short;
+        }
+
+        location /set-long {
+            content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_set_ttl_long;
+        }
+
+        location /get {
+            content_by_wasm @{[ TestWasm::shm_rich_wasm() ]} on_get_ttl;
+        }
+    }
+}
+EOF
+
+        my ($ok, undef, $stderr) = $nginx->nginx_test();
+        ok($ok, 'config test succeeds') or do { diag $stderr; $failed = 1; };
+        $nginx->start();
+        ok($nginx->wait_for_pid_file(timeout => 3), 'pid file created') or $failed = 1;
+
+        ($ok, my $body) = $nginx->wait_for_body(
+            url => "http://127.0.0.1:$port/set-short",
+            expected => 'added',
+        );
+        ok($ok, 'can store short ttl value') or do { diag $body; $failed = 1; };
+
+        select undef, undef, undef, 0.12;
+
+        ($ok, $body) = $nginx->wait_for_body(
+            url => "http://127.0.0.1:$port/get",
+            expected => 'missing',
+        );
+        ok($ok, 'expired ttl key is removed on read') or do { diag $body; $failed = 1; };
+
+        ($ok, $body) = $nginx->wait_for_body(
+            url => "http://127.0.0.1:$port/set-long",
+            expected => 'added',
+        );
+        ok($ok, 'can store long ttl value') or do { diag $body; $failed = 1; };
+
+        ($ok, undef, $stderr) = $nginx->reload();
+        ok($ok, 'reload succeeds') or do { diag $stderr; $failed = 1; };
+
+        ($ok, $body) = $nginx->wait_for_body(
+            url => "http://127.0.0.1:$port/get",
+            expected => 'second-value',
+        );
+        ok($ok, 'non-expired ttl key persists across reload') or do { diag $body; $failed = 1; };
+    };
+
+    if ($@) {
+        diag $@;
+        $failed = 1;
+    }
+    diag_error_log($nginx) if $failed;
+    $nginx->cleanup();
+};
+
 subtest 'metrics survive reload' => sub {
     my $port = random_port();
     my $nginx = TestWasmIntegration->new(root => TestWasm::wasm_root());

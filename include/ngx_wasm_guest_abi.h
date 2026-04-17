@@ -42,6 +42,11 @@ int ngx_wasm_shm_set(const void *key_ptr,
                      int key_len,
                      const void *value_ptr,
                      int value_len);
+int ngx_wasm_shm_set_ex(const void *key_ptr,
+                        int key_len,
+                        const void *value_ptr,
+                        int value_len,
+                        int ttl_msec);
 int ngx_wasm_shm_add(const void *key_ptr,
                      int key_len,
                      const void *value_ptr,
